@@ -27,6 +27,17 @@ INSTRUCTION = (
     "你會說什麼\\查此聊天室教的內容\n"
     "壞壞\\刪除 bot 上次回覆的內容"
 )
+commands = [
+    "你現在是甚麼模式",
+    "你現在是什麼模式",
+    "你現在什麼模式",
+    "閉嘴",
+    "聊天",
+    "亂說話模式",
+    "你會說什麼",
+    "壞壞",
+    "黃心如怎麼說",
+]
 
 
 @app.route("/callback", methods=["POST"])
@@ -92,6 +103,12 @@ def get_user_last_message():
 def set_user_last_message(user_id, message):
     data = get_user_last_message()
     data[user_id] = message
+    with open(USER_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+# 新增：儲存所有使用者最後訊息（用於群組重複訊息清空）
+def save_user_last_message(data):
     with open(USER_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
@@ -192,17 +209,28 @@ def handle_message(event):
             reply = "亂說話模式開啟！"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
-    # 判斷是否有其他人說過一樣的話
-    user_last = get_user_last_message()
-    for uid, msg in user_last.items():
-        if msg == text and uid != user_id:
-            # 回覆對方剛剛說的話
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=msg))
-            set_user_last_message(user_id, text)
+
+    if not (text.startswith("學 ") or text in commands):
+        user_last = get_user_last_message()
+        current_key = f"{source_id}:{user_id}"
+
+        # 取得同一個群組內所有人的最後訊息
+        group_user_keys = [k for k in user_last if k.startswith(f"{source_id}:")]
+        same_text_users = [
+            k for k in group_user_keys if user_last[k] == text and k != current_key
+        ]
+
+        if same_text_users:
+            # 有其他人在同群組說了一樣的話
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=text))
+            # 清空這個群組所有人的紀錄
+            for k in group_user_keys:
+                del user_last[k]
+            save_user_last_message(user_last)  # 假設你有這個儲存函式
             return
 
-    # 記錄這個人說的話
-    set_user_last_message(user_id, text)
+        # 正常記錄這個人的訊息
+        set_user_last_message(current_key, text)
 
     if text.startswith("學 "):
         parts = text.strip().split(maxsplit=2)
@@ -252,7 +280,6 @@ def handle_message(event):
                 lines.append(f"{item.get('key')} ; {item.get('value')}")
         reply = "\n".join(lines)
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
-
     elif text == "壞壞":
         last_key = get_last_reply()
         if last_key:
