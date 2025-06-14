@@ -70,19 +70,29 @@ def get_source_id(event):
         return "unknown"
 
 
-# 設定最後回覆的 key
-def set_last_reply(key):
-    with open(LAST_REPLY_FILE, "w", encoding="utf-8") as f:
-        json.dump({"key": key}, f)
-
-
-# 獲取最後回覆的 key
-def get_last_reply():
+# 設定最後回覆的 key（依群組）
+def set_last_reply(source_id, key):
     if os.path.exists(LAST_REPLY_FILE):
         with open(LAST_REPLY_FILE, "r", encoding="utf-8") as f:
             try:
                 data = json.load(f)
-                return data.get("key")
+            except json.JSONDecodeError:
+                data = {}
+    else:
+        data = {}
+    data[source_id] = {"key": key}
+    with open(LAST_REPLY_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+# 獲取最後回覆的 key（依群組）
+def get_last_reply(source_id):
+    if os.path.exists(LAST_REPLY_FILE):
+        with open(LAST_REPLY_FILE, "r", encoding="utf-8") as f:
+            try:
+                data = json.load(f)
+                group_data = data.get(source_id, {})
+                return group_data.get("key")
             except json.JSONDecodeError:
                 return None
     return None
@@ -113,22 +123,31 @@ def save_user_last_message(data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
-# 檢查是否為靜音模式
-def is_silent():
+# 檢查是否為靜音模式（依群組）
+def is_silent(source_id):
     if os.path.exists(SILENT_FILE):
         with open(SILENT_FILE, "r", encoding="utf-8") as f:
             try:
                 data = json.load(f)
-                return data.get("silent", False)
+                return data.get(source_id, False)
             except json.JSONDecodeError:
                 return False
     return False
 
 
-# 設定靜音模式
-def set_silent(silent):
+# 設定靜音模式（依群組）
+def set_silent(source_id, silent):
+    if os.path.exists(SILENT_FILE):
+        with open(SILENT_FILE, "r", encoding="utf-8") as f:
+            try:
+                data = json.load(f)
+            except json.JSONDecodeError:
+                data = {}
+    else:
+        data = {}
+    data[source_id] = silent
     with open(SILENT_FILE, "w", encoding="utf-8") as f:
-        json.dump({"silent": silent}, f)
+        json.dump(data, f, ensure_ascii=False, indent=2)
 
 
 # 檢查是否為亂說話模式
@@ -174,7 +193,7 @@ def handle_message(event):
         or text == "你現在是什麼模式"
         or text == "你現在什麼模式"
     ):
-        silent_status = "靜音模式" if is_silent() else "聊天模式"
+        silent_status = "靜音模式" if is_silent(source_id) else "聊天模式"
         rage_status = (
             "亂說話模式已開啟" if is_rage_mode(source_id) else "亂說話模式未開啟"
         )
@@ -184,29 +203,37 @@ def handle_message(event):
 
     # 處理閉嘴/聊天指令
     if text == "閉嘴":
-        if not is_silent():
-            set_silent(True)
+        if not is_silent(source_id):
+            set_silent(source_id, True)
             reply = "好啦 我閉嘴"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
             return
     if text == "聊天":
-        if is_silent():
+        if is_silent(source_id):
             reply = "嗚呼 強勢回歸！"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
-            set_silent(False)
+            set_silent(source_id, False)
             return
 
     # 若在靜音狀態則不回覆
-    if is_silent():
+    if is_silent(source_id):
         return
 
     # 處理亂說話模式
     if text == "亂說話模式":
         if is_rage_mode(source_id):
-            reply = "亂說話模式已經開啟了"
-        else:
-            set_rage_mode(source_id, True)
-            reply = "亂說話模式開啟！"
+            return  # 已經是亂說話模式就不回話
+        set_rage_mode(source_id, True)
+        reply = "我忍好久了"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+        return
+
+    # 處理乖寶寶模式（關閉亂說話模式）
+    if text == "乖寶寶模式":
+        if not is_rage_mode(source_id):
+            return  # 已經不是亂說話模式就不回話
+        set_rage_mode(source_id, False)
+        reply = "我現在乖的一匹"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
 
@@ -281,7 +308,7 @@ def handle_message(event):
         reply = "\n".join(lines)
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
     elif text == "壞壞":
-        last_key = get_last_reply()
+        last_key = get_last_reply(source_id)
         if last_key:
             # 讀取現有資料
             if os.path.exists(filename):
@@ -292,16 +319,22 @@ def handle_message(event):
                         all_data = []
             else:
                 all_data = []
-            # 找到 last_key 的 value
+            # 找到 last_key 並且 source_id 相同的 value
             last_val = None
             for item in all_data:
-                if last_key in item:
-                    last_val = item[last_key]
+                if item.get("key") == last_key and item.get("source_id") == source_id:
+                    last_val = item.get("value")
                     break
             if not last_val:
                 return  # 已經刪除就不回覆
-            # 刪除對應 key
-            all_data = [item for item in all_data if last_key not in item]
+            # 刪除對應 key 且 source_id 相同的資料
+            all_data = [
+                item
+                for item in all_data
+                if not (
+                    item.get("key") == last_key and item.get("source_id") == source_id
+                )
+            ]
             with open(filename, "w", encoding="utf-8") as f:
                 json.dump(all_data, f, ensure_ascii=False, indent=2)
             # 回覆 value
@@ -343,7 +376,7 @@ def handle_message(event):
                     line_bot_api.reply_message(
                         event.reply_token, TextSendMessage(text=reply)
                     )
-                    set_last_reply(item.get("key"))
+                    set_last_reply(source_id, item.get("key"))
                     return
         else:
             # 正常模式：只查本聊天室
@@ -358,7 +391,7 @@ def handle_message(event):
                     line_bot_api.reply_message(
                         event.reply_token, TextSendMessage(text=reply)
                     )
-                    set_last_reply(item.get("key"))
+                    set_last_reply(source_id, item.get("key"))
                     return
         # 沒找到就不回覆
         return
