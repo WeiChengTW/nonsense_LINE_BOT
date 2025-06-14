@@ -1,0 +1,341 @@
+from flask import Flask, request, abort
+from linebot import LineBotApi, WebhookHandler
+from linebot.exceptions import InvalidSignatureError
+from linebot.models import MessageEvent, TextMessage, TextSendMessage, JoinEvent
+import json
+import os
+import random
+
+# -*- coding: utf-8 -*-
+
+app = Flask(__name__)
+
+line_bot_api = LineBotApi(
+    "o/bUKxlPGA3FzqNC8oscvP2JTMfLijLyTSOyBlqOn+7O8qS7dYmLvylKsxvW122UMu7oI3FXvBeXG2gFisMYJ8H/Ryjy7mfc1MyXNK5SX9VQgAYazOYczx4XyiROCK8qb08flT4QmqM7+62G47+3sQdB04t89/1O/w1cDnyilFU="
+)
+handler = WebhookHandler("4bf0915e79f18c12d019119189398de9")
+
+INSTRUCTION = (
+    "【LineBot 使用說明】\n"
+    "指令\\功能說明\n"
+    "----------------------\n"
+    "你現在是甚麼模式\\目前 bot 的運作模式\n"
+    "閉嘴\\bot 不再回覆訊息\n"
+    "聊天\\恢復回覆訊息\n"
+    "亂說話模式\\啟用跨聊天室\n"
+    "學 A B\\教 bot 收到「A」回覆「B」\n"
+    "你會說什麼\\查此聊天室教的內容\n"
+    "壞壞\\刪除 bot 上次回覆的內容"
+)
+
+
+@app.route("/callback", methods=["POST"])
+def callback():
+    signature = request.headers["X-Line-Signature"]
+    body = request.get_data(as_text=True)
+    try:
+        handler.handle(body, signature)
+    except InvalidSignatureError:
+        abort(400)
+    return "OK"
+
+
+SILENT_FILE = "silent_mode.json"
+USER_FILE = "user_last_message.json"
+LAST_REPLY_FILE = "last_reply.json"
+RAGE_FILE = "rage_mode.json"
+TEACHER_FILE = "teacher.json"
+
+
+# 獲取事件來源的 ID
+def get_source_id(event):
+    if event.source.type == "user":
+        return event.source.user_id
+    elif event.source.type == "group":
+        return event.source.group_id
+    elif event.source.type == "room":
+        return event.source.room_id
+    else:
+        return "unknown"
+
+
+# 設定最後回覆的 key
+def set_last_reply(key):
+    with open(LAST_REPLY_FILE, "w", encoding="utf-8") as f:
+        json.dump({"key": key}, f)
+
+
+# 獲取最後回覆的 key
+def get_last_reply():
+    if os.path.exists(LAST_REPLY_FILE):
+        with open(LAST_REPLY_FILE, "r", encoding="utf-8") as f:
+            try:
+                data = json.load(f)
+                return data.get("key")
+            except json.JSONDecodeError:
+                return None
+    return None
+
+
+# 獲取使用者最後的訊息
+def get_user_last_message():
+    if os.path.exists(USER_FILE):
+        with open(USER_FILE, "r", encoding="utf-8") as f:
+            try:
+                return json.load(f)
+            except json.JSONDecodeError:
+                return {}
+    return {}
+
+
+# 設定使用者最後的訊息
+def set_user_last_message(user_id, message):
+    data = get_user_last_message()
+    data[user_id] = message
+    with open(USER_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+# 檢查是否為靜音模式
+def is_silent():
+    if os.path.exists(SILENT_FILE):
+        with open(SILENT_FILE, "r", encoding="utf-8") as f:
+            try:
+                data = json.load(f)
+                return data.get("silent", False)
+            except json.JSONDecodeError:
+                return False
+    return False
+
+
+# 設定靜音模式
+def set_silent(silent):
+    with open(SILENT_FILE, "w", encoding="utf-8") as f:
+        json.dump({"silent": silent}, f)
+
+
+# 檢查是否為亂說話模式
+def is_rage_mode(source_id):
+    if os.path.exists(RAGE_FILE):
+        with open(RAGE_FILE, "r", encoding="utf-8") as f:
+            try:
+                data = json.load(f)
+                return data.get(source_id, False)
+            except json.JSONDecodeError:
+                return False
+    return False
+
+
+# 設定亂說話模式
+def set_rage_mode(source_id, mode):
+    if os.path.exists(RAGE_FILE):
+        with open(RAGE_FILE, "r", encoding="utf-8") as f:
+            try:
+                data = json.load(f)
+            except json.JSONDecodeError:
+                data = {}
+    else:
+        data = {}
+    data[source_id] = mode
+    with open(RAGE_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+@handler.add(JoinEvent)
+def handle_join(event):
+    line_bot_api.reply_message(event.reply_token, TextSendMessage(text=INSTRUCTION))
+
+
+@handler.add(MessageEvent, message=TextMessage)
+def handle_message(event):
+    text = event.message.text
+    user_id = event.source.user_id
+    source_id = get_source_id(event)
+    filename = "data.json"
+    if (
+        text == "你現在是甚麼模式"
+        or text == "你現在是什麼模式"
+        or text == "你現在什麼模式"
+    ):
+        silent_status = "靜音模式" if is_silent() else "聊天模式"
+        rage_status = (
+            "亂說話模式已開啟" if is_rage_mode(source_id) else "亂說話模式未開啟"
+        )
+        reply = f"我現在是{silent_status}\n{rage_status}"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+        return
+
+    # 處理閉嘴/聊天指令
+    if text == "閉嘴":
+        if not is_silent():
+            set_silent(True)
+            reply = "好啦 我閉嘴"
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+            return
+    if text == "聊天":
+        if is_silent():
+            reply = "嗚呼 強勢回歸！"
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+            set_silent(False)
+            return
+
+    # 若在靜音狀態則不回覆
+    if is_silent():
+        return
+
+    # 處理亂說話模式
+    if text == "亂說話模式":
+        if is_rage_mode(source_id):
+            reply = "亂說話模式已經開啟了"
+        else:
+            set_rage_mode(source_id, True)
+            reply = "亂說話模式開啟！"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+        return
+    # 判斷是否有其他人說過一樣的話
+    user_last = get_user_last_message()
+    for uid, msg in user_last.items():
+        if msg == text and uid != user_id:
+            # 回覆對方剛剛說的話
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=msg))
+            set_user_last_message(user_id, text)
+            return
+
+    # 記錄這個人說的話
+    set_user_last_message(user_id, text)
+
+    if text.startswith("學 "):
+        parts = text.strip().split(maxsplit=2)
+        if len(parts) == 3:
+            key = parts[1]
+            value = parts[2]
+            filename = "data.json"
+            # 讀取現有資料
+            if os.path.exists(filename):
+                with open(filename, "r", encoding="utf-8") as f:
+                    try:
+                        all_data = json.load(f)
+                    except json.JSONDecodeError:
+                        all_data = []
+            else:
+                all_data = []
+            # 移除已存在的相同 key 且同一個聊天室
+            all_data = [
+                item
+                for item in all_data
+                if not (item.get("key") == key and item.get("source_id") == source_id)
+            ]
+            # 加入新資料
+            all_data.append({"key": key, "value": value, "source_id": source_id})
+            # 寫回 json
+            with open(filename, "w", encoding="utf-8") as f:
+                json.dump(all_data, f, ensure_ascii=False, indent=2)
+            print(f"已學會：{key} = {value} (來源: {source_id})")
+            reply = f"好喔 好喔"
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+        else:
+            reply = "格式錯誤，請輸入：學 A B"
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+    elif text == "你會說什麼":
+
+        if os.path.exists(filename):
+            with open(filename, "r", encoding="utf-8") as f:
+                try:
+                    all_data = json.load(f)
+                except json.JSONDecodeError:
+                    all_data = []
+        else:
+            all_data = []
+        lines = ["這裡教我說\n=============="]
+        for item in all_data:
+            if item.get("source_id") == source_id:
+                lines.append(f"{item.get('key')} ; {item.get('value')}")
+        reply = "\n".join(lines)
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+
+    elif text == "壞壞":
+        last_key = get_last_reply()
+        if last_key:
+            # 讀取現有資料
+            if os.path.exists(filename):
+                with open(filename, "r", encoding="utf-8") as f:
+                    try:
+                        all_data = json.load(f)
+                    except json.JSONDecodeError:
+                        all_data = []
+            else:
+                all_data = []
+            # 找到 last_key 的 value
+            last_val = None
+            for item in all_data:
+                if last_key in item:
+                    last_val = item[last_key]
+                    break
+            if not last_val:
+                return  # 已經刪除就不回覆
+            # 刪除對應 key
+            all_data = [item for item in all_data if last_key not in item]
+            with open(filename, "w", encoding="utf-8") as f:
+                json.dump(all_data, f, ensure_ascii=False, indent=2)
+            # 回覆 value
+            reply = f"下次不說{last_val}了"
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+        return
+    elif text == "黃心如怎麼說":
+        teacher_file = TEACHER_FILE
+        if os.path.exists(teacher_file):
+            with open(teacher_file, "r", encoding="utf-8") as f:
+                teacher_data = json.load(f)
+                phrases = teacher_data.get("phrases", [])
+                reply = random.choice(phrases)
+        else:
+            reply = "老師今天沒話說～"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+        return
+    else:
+        # 查詢功能
+        if os.path.exists(filename):
+            with open(filename, "r", encoding="utf-8") as f:
+                try:
+                    all_data = json.load(f)
+                except json.JSONDecodeError:
+                    all_data = []
+        else:
+            all_data = []
+
+        if is_rage_mode(source_id):
+            # 狂暴模式：查所有聊天室
+            for item in all_data:
+                if item.get("key") == text:
+                    value = item.get("value", "")
+                    if "/" in value:
+                        options = [v.strip() for v in value.split("/")]
+                        reply = random.choice(options)
+                    else:
+                        reply = value
+                    line_bot_api.reply_message(
+                        event.reply_token, TextSendMessage(text=reply)
+                    )
+                    set_last_reply(item.get("key"))
+                    return
+        else:
+            # 正常模式：只查本聊天室
+            for item in all_data:
+                if item.get("key") == text and item.get("source_id") == source_id:
+                    value = item.get("value", "")
+                    if "/" in value:
+                        options = [v.strip() for v in value.split("/")]
+                        reply = random.choice(options)
+                    else:
+                        reply = value
+                    line_bot_api.reply_message(
+                        event.reply_token, TextSendMessage(text=reply)
+                    )
+                    set_last_reply(item.get("key"))
+                    return
+        # 沒找到就不回覆
+        return
+
+
+if __name__ == "__main__":
+    app.run(port=5000, debug=True)
