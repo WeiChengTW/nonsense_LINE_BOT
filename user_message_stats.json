@@ -1,0 +1,51 @@
+{
+  "C39f40483ecddf5f00183fa527b8e3e28": {
+    "Ub671bf561fb813d91a9f48b8a3fd88a6": {
+      "total": 59,
+      "2025-06": 59,
+      "hour_count": {
+        "18": 8,
+        "19": 9,
+        "21": 24,
+        "22": 18
+      },
+      "sticker_total": 2,
+      "image_total": 1,
+      "file_total": 1
+    }
+  },
+  "Ub671bf561fb813d91a9f48b8a3fd88a6": {
+    "Ub671bf561fb813d91a9f48b8a3fd88a6": {
+      "total": 2,
+      "2025-06": 2,
+      "hour_count": {
+        "18": 2
+      }
+    }
+  },
+  "C728f409249f397086c463735954cb19b": {
+    "Ub671bf561fb813d91a9f48b8a3fd88a6": {
+      "total": 11,
+      "2025-06": 11,
+      "hour_count": {
+        "22": 11
+      }
+    },
+    "U7d4ee3d9a2aac4aa22df1432469faef9": {
+      "total": 5,
+      "2025-06": 5,
+      "hour_count": {
+        "22": 5
+      },
+      "sticker_total": 1
+    },
+    "U3b5aea899389fe1b517670337e85cb05": {
+      "sticker_total": 1,
+      "total": 1,
+      "2025-06": 1,
+      "hour_count": {
+        "22": 1
+      }
+    }
+  }
+}
