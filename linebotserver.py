@@ -472,6 +472,82 @@ def handle_message(event):
 
         # 正常記錄這個人的訊息
         set_user_last_message(current_key, text)
+    if text == "統計資料":
+        # 讀取統計資料
+        if os.path.exists(USER_STATS_FILE):
+            with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
+                try:
+                    stats = json.load(f)
+                except json.JSONDecodeError:
+                    stats = {}
+        else:
+            stats = {}
+        user_stats = stats.get(source_id, {}).get(user_id, {})
+        total = user_stats.get("total", 0)
+        month = user_stats.get(datetime.datetime.now().strftime("%Y-%m"), 0)
+        sticker_total = user_stats.get("sticker_total", 0)
+        hour_count = user_stats.get("hour_count", {})
+
+        # 組成多頁訊息（CarouselTemplate）
+        quick_reply = QuickReply(
+            items=[
+                QuickReplyButton(
+                    action=MessageAction(label="全部統計", text="全部統計")
+                ),
+                QuickReplyButton(
+                    action=MessageAction(label="貼圖統計", text="貼圖統計")
+                ),
+                QuickReplyButton(
+                    action=MessageAction(label="每小時統計", text="每小時統計")
+                ),
+            ]
+        )
+        reply_text = "請選擇要查詢的統計類型："
+        line_bot_api.reply_message(
+            event.reply_token, TextSendMessage(text=reply_text, quick_reply=quick_reply)
+        )
+        return
+    if text == "全部統計":
+        total, month = get_user_message_stats(source_id, user_id)
+        now = datetime.datetime.now()
+        reply = f"你在這個群組總共說了 {total} 句話\n本月({now.strftime('%Y-%m')})說了 {month} 句話"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+        return
+    if text == "每小時統計":
+        if os.path.exists(USER_STATS_FILE):
+            with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
+                try:
+                    stats = json.load(f)
+                except json.JSONDecodeError:
+                    stats = {}
+        else:
+            stats = {}
+        user_stats = stats.get(source_id, {}).get(user_id, {})
+        hour_count = user_stats.get("hour_count", {})
+        if hour_count:
+            max_hour = max(hour_count, key=lambda h: hour_count[h])
+            max_count = hour_count[max_hour]
+            reply = f"你最常在 {max_hour}:00 ~ {int(max_hour)+1}:00 說話（共 {max_count} 句）"
+        else:
+            reply = "你還沒有說過話喔！"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+        return
+
+    if text == "貼圖統計":
+        # 讀取統計資料
+        if os.path.exists(USER_STATS_FILE):
+            with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
+                try:
+                    stats = json.load(f)
+                except json.JSONDecodeError:
+                    stats = {}
+        else:
+            stats = {}
+        user_stats = stats.get(source_id, {}).get(user_id, {})
+        sticker_total = user_stats.get("sticker_total", 0)
+        reply = f"你在這個群組傳過 {sticker_total} 次貼圖"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+        return
 
     if text == "排行榜":
         if event.source.type == "group":
