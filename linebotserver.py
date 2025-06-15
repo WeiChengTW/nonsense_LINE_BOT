@@ -2,9 +2,19 @@ from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage, JoinEvent
+from linebot.models import StickerMessage, StickerSendMessage
+from linebot.models import (
+    TemplateSendMessage,
+    CarouselTemplate,
+    CarouselColumn,
+    MessageAction,
+)
 import json
 import os
 import random
+import re
+import datetime
+from linebot.models import QuickReply, QuickReplyButton
 
 # -*- coding: utf-8 -*-
 
@@ -39,6 +49,10 @@ commands = [
     "你會說什麼",
     "壞壞",
     "黃心如怎麼說",
+    "全部統計",
+    "每小時統計",
+    "貼圖統計",
+    "統計資料",
 ]
 
 
@@ -58,6 +72,7 @@ USER_FILE = "user_last_message.json"
 LAST_REPLY_FILE = "last_reply.json"
 RAGE_FILE = "rage_mode.json"
 TEACHER_FILE = "teacher.json"
+USER_STATS_FILE = "user_message_stats.json"
 
 
 # 獲取事件來源的 ID
@@ -70,6 +85,55 @@ def get_source_id(event):
         return event.source.room_id
     else:
         return "unknown"
+
+
+# 獲取使用者訊息統計（依群組和使用者）
+def update_user_message_stats(group_id, user_id):
+    now = datetime.datetime.now()
+    month_key = now.strftime("%Y-%m")
+    hour_key = str(now.hour)
+    if os.path.exists(USER_STATS_FILE):
+        with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
+            try:
+                stats = json.load(f)
+            except json.JSONDecodeError:
+                stats = {}
+    else:
+        stats = {}
+    if group_id not in stats:
+        stats[group_id] = {}
+    if user_id not in stats[group_id]:
+        stats[group_id][user_id] = {"total": 0}
+    # 累加總數
+    stats[group_id][user_id]["total"] = stats[group_id][user_id].get("total", 0) + 1
+    # 累加本月
+    stats[group_id][user_id][month_key] = stats[group_id][user_id].get(month_key, 0) + 1
+    # 累加每小時
+    if "hour_count" not in stats[group_id][user_id]:
+        stats[group_id][user_id]["hour_count"] = {}
+    stats[group_id][user_id]["hour_count"][hour_key] = (
+        stats[group_id][user_id]["hour_count"].get(hour_key, 0) + 1
+    )
+    with open(USER_STATS_FILE, "w", encoding="utf-8") as f:
+        json.dump(stats, f, ensure_ascii=False, indent=2)
+
+
+# 獲取使用者訊息統計（依群組和使用者）
+def get_user_message_stats(group_id, user_id):
+    now = datetime.datetime.now()
+    month_key = now.strftime("%Y-%m")
+    if os.path.exists(USER_STATS_FILE):
+        with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
+            try:
+                stats = json.load(f)
+            except json.JSONDecodeError:
+                stats = {}
+    else:
+        stats = {}
+    user_stats = stats.get(group_id, {}).get(user_id, {})
+    total = user_stats.get("total", 0)
+    month = user_stats.get(month_key, 0)
+    return total, month
 
 
 # 設定最後回覆的 key（依群組）
@@ -184,11 +248,39 @@ def handle_join(event):
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=INSTRUCTION))
 
 
+@handler.add(MessageEvent, message=StickerMessage)
+def handle_sticker(event):
+    user_id = event.source.user_id
+    source_id = get_source_id(event)
+
+    # 更新貼圖統計（只統計次數，不記錄類型）
+    if os.path.exists(USER_STATS_FILE):
+        with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
+            try:
+                stats = json.load(f)
+            except json.JSONDecodeError:
+                stats = {}
+    else:
+        stats = {}
+    if source_id not in stats:
+        stats[source_id] = {}
+    if user_id not in stats[source_id]:
+        stats[source_id][user_id] = {}
+    # 統計貼圖總數
+    stats[source_id][user_id]["sticker_total"] = (
+        stats[source_id][user_id].get("sticker_total", 0) + 1
+    )
+
+    with open(USER_STATS_FILE, "w", encoding="utf-8") as f:
+        json.dump(stats, f, ensure_ascii=False, indent=2)
+
+
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     text = event.message.text
     user_id = event.source.user_id
     source_id = get_source_id(event)
+    update_user_message_stats(source_id, user_id)
     filename = "data.json"
     if (
         text == "你現在是甚麼模式"
@@ -260,12 +352,94 @@ def handle_message(event):
 
         # 正常記錄這個人的訊息
         set_user_last_message(current_key, text)
+    if text == "統計資料":
+        # 讀取統計資料
+        if os.path.exists(USER_STATS_FILE):
+            with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
+                try:
+                    stats = json.load(f)
+                except json.JSONDecodeError:
+                    stats = {}
+        else:
+            stats = {}
+        user_stats = stats.get(source_id, {}).get(user_id, {})
+        total = user_stats.get("total", 0)
+        month = user_stats.get(datetime.datetime.now().strftime("%Y-%m"), 0)
+        sticker_total = user_stats.get("sticker_total", 0)
+        hour_count = user_stats.get("hour_count", {})
+
+        # 組成多頁訊息（CarouselTemplate）
+        quick_reply = QuickReply(
+            items=[
+                QuickReplyButton(
+                    action=MessageAction(label="全部統計", text="全部統計")
+                ),
+                QuickReplyButton(
+                    action=MessageAction(label="貼圖統計", text="貼圖統計")
+                ),
+                QuickReplyButton(
+                    action=MessageAction(label="每小時統計", text="每小時統計")
+                ),
+            ]
+        )
+        reply_text = "請選擇要查詢的統計類型："
+        line_bot_api.reply_message(
+            event.reply_token, TextSendMessage(text=reply_text, quick_reply=quick_reply)
+        )
+        return
+    if text == "全部統計":
+        total, month = get_user_message_stats(source_id, user_id)
+        now = datetime.datetime.now()
+        reply = f"你在這個群組總共說了 {total} 句話\n本月({now.strftime('%Y-%m')})說了 {month} 句話"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+        return
+    if text == "每小時統計":
+        if os.path.exists(USER_STATS_FILE):
+            with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
+                try:
+                    stats = json.load(f)
+                except json.JSONDecodeError:
+                    stats = {}
+        else:
+            stats = {}
+        user_stats = stats.get(source_id, {}).get(user_id, {})
+        hour_count = user_stats.get("hour_count", {})
+        if hour_count:
+            max_hour = max(hour_count, key=lambda h: hour_count[h])
+            max_count = hour_count[max_hour]
+            reply = f"你最常在 {max_hour}:00 ~ {int(max_hour)+1}:00 說話（共 {max_count} 句）"
+        else:
+            reply = "你還沒有說過話喔！"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+        return
+
+    if text == "貼圖統計":
+        # 讀取統計資料
+        if os.path.exists(USER_STATS_FILE):
+            with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
+                try:
+                    stats = json.load(f)
+                except json.JSONDecodeError:
+                    stats = {}
+        else:
+            stats = {}
+        user_stats = stats.get(source_id, {}).get(user_id, {})
+        sticker_total = user_stats.get("sticker_total", 0)
+        reply = f"你在這個群組傳過 {sticker_total} 次貼圖"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+        return
 
     if text.startswith("學 "):
         parts = text.strip().split(maxsplit=2)
         if len(parts) == 3:
             key = parts[1]
             value = parts[2]
+            if key in commands:
+                reply = f'你是不是沒看使用說明\n"{key}" 是指令，不能學習'
+                line_bot_api.reply_message(
+                    event.reply_token, TextSendMessage(text=reply)
+                )
+                return
             filename = "data.json"
             # 讀取現有資料
             if os.path.exists(filename):
@@ -366,24 +540,31 @@ def handle_message(event):
             all_data = []
 
         if is_rage_mode(source_id):
-            # 狂暴模式：查所有聊天室
-            for item in all_data:
-                if item.get("key") == text:
-                    value = item.get("value", "")
-                    if "/" in value:
-                        options = [v.strip() for v in value.split("/")]
-                        reply = random.choice(options)
-                    else:
-                        reply = value
-                    line_bot_api.reply_message(
-                        event.reply_token, TextSendMessage(text=reply)
-                    )
-                    set_last_reply(source_id, item.get("key"))
-                    return
+            # 狂暴模式：查所有聊天室，隨機選一個
+            matched_items = [
+                item
+                for item in all_data
+                if re.match(rf"^{re.escape(item.get('key'))} *$", text)
+            ]
+            if matched_items:
+                item = random.choice(matched_items)
+                value = item.get("value", "")
+                if "/" in value:
+                    options = [v.strip() for v in value.split("/")]
+                    reply = random.choice(options)
+                else:
+                    reply = value
+                line_bot_api.reply_message(
+                    event.reply_token, TextSendMessage(text=reply)
+                )
+                set_last_reply(source_id, item.get("key"))
+                return
         else:
             # 正常模式：只查本聊天室
             for item in all_data:
-                if item.get("key") == text and item.get("source_id") == source_id:
+                key = item.get("key")
+                pattern = rf"^{re.escape(key)} *$"
+                if re.match(pattern, text) and item.get("source_id") == source_id:
                     value = item.get("value", "")
                     if "/" in value:
                         options = [v.strip() for v in value.split("/")]
