@@ -40,10 +40,23 @@ INSTRUCTION = (
     "學 A B\\教 bot 收到「A」回覆「B」\n"
     "你會說什麼\\查本聊天室教的內容\n"
     "壞壞\\刪除 bot 上次回覆的內容\n"
-    "統計資料\\查詢個人訊息/貼圖/圖片/文件/連結等統計\n"
-    "我的口頭禪 [年份]\\查詢自己常用詞排行\n"
-    "排行榜\\查詢群組發言排行榜"
 )
+# INSTRUCTION = (
+#     "【LineBot 使用說明】\n"
+#     "指令\\功能說明\n"
+#     "----------------------\n"
+#     "設定設定\\查詢/切換 bot 模式\n"
+#     "閉嘴\\bot 進入靜音模式\n"
+#     "聊天\\恢復回覆訊息\n"
+#     "亂說話模式\\啟用跨聊天室回覆\n"
+#     "乖寶寶模式\\只回本聊天室教的內容\n"
+#     "學 A B\\教 bot 收到「A」回覆「B」\n"
+#     "你會說什麼\\查本聊天室教的內容\n"
+#     "壞壞\\刪除 bot 上次回覆的內容\n"
+#     "統計資料\\查詢個人訊息/貼圖/圖片/文件/連結等統計\n"
+#     "我的口頭禪 [年份]\\查詢自己常用詞排行\n"
+#     "排行榜\\查詢群組發言排行榜"
+# )
 commands = [
     "設定設定",
     "閉嘴",
@@ -57,6 +70,7 @@ commands = [
     "每小時統計",
     "貼圖統計",
     "統計資料",
+    "資料統計",
     "訊息統計",
     "連結統計",
     "圖片統計",
@@ -64,6 +78,7 @@ commands = [
     "我的口頭禪",
     "排行榜",
 ]
+BAN_WORDS = ["洪偉城", "洪偉成", "宏偉成"]
 
 
 @app.route("/callback", methods=["POST"])
@@ -88,6 +103,9 @@ USER_MESSAGES_FILE = "user_messages.json"
 
 # 儲存使用者訊息（依群組和使用者）
 def save_user_message(group_id, user_id, message):
+    # 不儲存指令
+    if message in commands:
+        return
     year = str(datetime.datetime.now().year)
     if os.path.exists(USER_MESSAGES_FILE):
         with open(USER_MESSAGES_FILE, "r", encoding="utf-8") as f:
@@ -132,7 +150,10 @@ def get_user_top_words(group_id, user_id, year=None, topn=5):
     if not most_common:
         return "沒有資料"
     result = f"{year}年你的口頭禪排行：\n"
-    for word, count in most_common:
+    # 只顯示前三名
+    for idx, (word, count) in enumerate(most_common):
+        if idx >= 3:
+            break
         result += f"{word}：{count} 次\n"
     return result
 
@@ -475,82 +496,6 @@ def handle_message(event):
 
         # 正常記錄這個人的訊息
         set_user_last_message(current_key, text)
-    if text == "統計資料":
-        # 讀取統計資料
-        if os.path.exists(USER_STATS_FILE):
-            with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
-                try:
-                    stats = json.load(f)
-                except json.JSONDecodeError:
-                    stats = {}
-        else:
-            stats = {}
-        user_stats = stats.get(source_id, {}).get(user_id, {})
-        total = user_stats.get("total", 0)
-        month = user_stats.get(datetime.datetime.now().strftime("%Y-%m"), 0)
-        sticker_total = user_stats.get("sticker_total", 0)
-        hour_count = user_stats.get("hour_count", {})
-
-        # 組成多頁訊息（CarouselTemplate）
-        quick_reply = QuickReply(
-            items=[
-                QuickReplyButton(
-                    action=MessageAction(label="全部統計", text="全部統計")
-                ),
-                QuickReplyButton(
-                    action=MessageAction(label="貼圖統計", text="貼圖統計")
-                ),
-                QuickReplyButton(
-                    action=MessageAction(label="每小時統計", text="每小時統計")
-                ),
-            ]
-        )
-        reply_text = "請選擇要查詢的統計類型："
-        line_bot_api.reply_message(
-            event.reply_token, TextSendMessage(text=reply_text, quick_reply=quick_reply)
-        )
-        return
-    if text == "全部統計":
-        total, month = get_user_message_stats(source_id, user_id)
-        now = datetime.datetime.now()
-        reply = f"你在這個群組總共說了 {total} 句話\n本月({now.strftime('%Y-%m')})說了 {month} 句話"
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
-        return
-    if text == "每小時統計":
-        if os.path.exists(USER_STATS_FILE):
-            with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
-                try:
-                    stats = json.load(f)
-                except json.JSONDecodeError:
-                    stats = {}
-        else:
-            stats = {}
-        user_stats = stats.get(source_id, {}).get(user_id, {})
-        hour_count = user_stats.get("hour_count", {})
-        if hour_count:
-            max_hour = max(hour_count, key=lambda h: hour_count[h])
-            max_count = hour_count[max_hour]
-            reply = f"你最常在 {max_hour}:00 ~ {int(max_hour)+1}:00 說話（共 {max_count} 句）"
-        else:
-            reply = "你還沒有說過話喔！"
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
-        return
-
-    if text == "貼圖統計":
-        # 讀取統計資料
-        if os.path.exists(USER_STATS_FILE):
-            with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
-                try:
-                    stats = json.load(f)
-                except json.JSONDecodeError:
-                    stats = {}
-        else:
-            stats = {}
-        user_stats = stats.get(source_id, {}).get(user_id, {})
-        sticker_total = user_stats.get("sticker_total", 0)
-        reply = f"你在這個群組傳過 {sticker_total} 次貼圖"
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
-        return
 
     if text == "排行榜":
         if event.source.type == "group":
@@ -564,7 +509,7 @@ def handle_message(event):
                 event.reply_token, TextSendMessage(text="請在群組中使用本指令")
             )
         return
-    if text == "統計資料":
+    if text == "統計資料" or text == "資料統計":
         # 讀取統計資料
         if os.path.exists(USER_STATS_FILE):
             with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
@@ -746,6 +691,13 @@ def handle_message(event):
         if len(parts) == 3:
             key = parts[1]
             value = parts[2]
+            # 禁止學習特定關鍵字
+            if key in BAN_WORDS or value in BAN_WORDS:
+                reply = "你怎麼敢的啊?"
+                line_bot_api.reply_message(
+                    event.reply_token, TextSendMessage(text=reply)
+                )
+                return
             if key in commands:
                 reply = f'你是不是沒看使用說明\n"{key}" 是指令，不能學習'
                 line_bot_api.reply_message(
