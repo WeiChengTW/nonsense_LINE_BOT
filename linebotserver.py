@@ -7,6 +7,7 @@ from linebot.models import (
     TemplateSendMessage,
     MessageAction,
 )
+from linebot.models import VideoSendMessage
 from linebot.models import QuickReply, QuickReplyButton, MessageAction
 from linebot.models import TemplateSendMessage, ButtonsTemplate, MessageAction
 from linebot.models import ImageMessage, FileMessage
@@ -77,6 +78,8 @@ commands = [
     "文件統計",
     "我的口頭禪",
     "排行榜",
+    "說笑話",
+    "唱歌",
 ]
 BAN_WORDS = ["洪偉城", "洪偉成", "宏偉成"]
 
@@ -99,6 +102,7 @@ RAGE_FILE = "rage_mode.json"
 TEACHER_FILE = "teacher.json"
 USER_STATS_FILE = "user_message_stats.json"
 USER_MESSAGES_FILE = "user_messages.json"
+JOKE_FILE = "joke.json"
 
 
 # 儲存使用者訊息（依群組和使用者）
@@ -448,6 +452,70 @@ def handle_message(event):
     # 若在靜音狀態則不回覆
     if is_silent(source_id):
         return
+    # 查詢功能
+    if os.path.exists(filename):
+        with open(filename, "r", encoding="utf-8") as f:
+            try:
+                all_data = json.load(f)
+            except json.JSONDecodeError:
+                all_data = []
+    else:
+        all_data = []
+
+    if is_rage_mode(source_id):
+        # 狂暴模式：查所有聊天室，隨機選一個
+        matched_items = [
+            item
+            for item in all_data
+            if re.match(rf"^{re.escape(item.get('key'))} *$", text)
+        ]
+        if matched_items:
+            item = random.choice(matched_items)
+            value = item.get("value", "")
+            if "/" in value:
+                options = [v.strip() for v in value.split("/")]
+                reply = random.choice(options)
+            else:
+                reply = value
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+            set_last_reply(source_id, item.get("key"))
+            return
+    else:
+        # 正常模式：只查本聊天室
+        for item in all_data:
+            key = item.get("key")
+            pattern = rf"^{re.escape(key)} *$"
+            if re.match(pattern, text) and item.get("source_id") == source_id:
+                value = item.get("value", "")
+                if "/" in value:
+                    options = [v.strip() for v in value.split("/")]
+                    reply = random.choice(options)
+                else:
+                    reply = value
+                line_bot_api.reply_message(
+                    event.reply_token, TextSendMessage(text=reply)
+                )
+                set_last_reply(source_id, item.get("key"))
+                return
+
+    if text == "說笑話":
+
+        if os.path.exists(JOKE_FILE):
+            with open(JOKE_FILE, "r", encoding="utf-8") as f:
+                try:
+                    jokes = json.load(f)
+                except json.JSONDecodeError:
+                    jokes = []
+        else:
+            jokes = []
+        if jokes:
+            joke = random.choice(jokes)
+            reply = joke.get("joke", "今天沒有笑話喔！")
+        else:
+            reply = "今天沒有笑話喔！"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
+        return
+
     match = re.match(r"^我的口頭禪(?:\s*(\d{4}))?$", text)
     if event.source.type in ["group", "room"]:
         if match:
@@ -474,28 +542,6 @@ def handle_message(event):
         reply = "我現在乖的一匹"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
-
-    if not (text.startswith("學 ") or text in commands):
-        user_last = get_user_last_message()
-        current_key = f"{source_id}:{user_id}"
-
-        # 取得同一個群組內所有人的最後訊息
-        group_user_keys = [k for k in user_last if k.startswith(f"{source_id}:")]
-        same_text_users = [
-            k for k in group_user_keys if user_last[k] == text and k != current_key
-        ]
-
-        if same_text_users:
-            # 有其他人在同群組說了一樣的話
-            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=text))
-            # 清空這個群組所有人的紀錄
-            for k in group_user_keys:
-                del user_last[k]
-            save_user_last_message(user_last)  # 假設你有這個儲存函式
-            return
-
-        # 正常記錄這個人的訊息
-        set_user_last_message(current_key, text)
 
     if text == "排行榜":
         if event.source.type == "group":
@@ -731,7 +777,7 @@ def handle_message(event):
         else:
             reply = "格式錯誤，請輸入：學 A B"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
-    elif text == "你會說什麼":
+    if text == "你會說什麼":
 
         if os.path.exists(filename):
             with open(filename, "r", encoding="utf-8") as f:
@@ -747,7 +793,7 @@ def handle_message(event):
                 lines.append(f"{item.get('key')} ; {item.get('value')}")
         reply = "\n".join(lines)
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
-    elif text == "壞壞":
+    if text == "壞壞":
         last_key = get_last_reply(source_id)
         if last_key:
             # 讀取現有資料
@@ -781,7 +827,7 @@ def handle_message(event):
             reply = f"下次不說{last_val}了"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
-    elif text == "黃心如怎麼說":
+    if text == "黃心如怎麼說":
         teacher_file = TEACHER_FILE
         if os.path.exists(teacher_file):
             with open(teacher_file, "r", encoding="utf-8") as f:
@@ -792,56 +838,28 @@ def handle_message(event):
             reply = "老師今天沒話說～"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
-    else:
-        # 查詢功能
-        if os.path.exists(filename):
-            with open(filename, "r", encoding="utf-8") as f:
-                try:
-                    all_data = json.load(f)
-                except json.JSONDecodeError:
-                    all_data = []
-        else:
-            all_data = []
+    # 跟風模式
+    if not (text.startswith("學 ") or text in commands):
+        user_last = get_user_last_message()
+        current_key = f"{source_id}:{user_id}"
 
-        if is_rage_mode(source_id):
-            # 狂暴模式：查所有聊天室，隨機選一個
-            matched_items = [
-                item
-                for item in all_data
-                if re.match(rf"^{re.escape(item.get('key'))} *$", text)
-            ]
-            if matched_items:
-                item = random.choice(matched_items)
-                value = item.get("value", "")
-                if "/" in value:
-                    options = [v.strip() for v in value.split("/")]
-                    reply = random.choice(options)
-                else:
-                    reply = value
-                line_bot_api.reply_message(
-                    event.reply_token, TextSendMessage(text=reply)
-                )
-                set_last_reply(source_id, item.get("key"))
-                return
-        else:
-            # 正常模式：只查本聊天室
-            for item in all_data:
-                key = item.get("key")
-                pattern = rf"^{re.escape(key)} *$"
-                if re.match(pattern, text) and item.get("source_id") == source_id:
-                    value = item.get("value", "")
-                    if "/" in value:
-                        options = [v.strip() for v in value.split("/")]
-                        reply = random.choice(options)
-                    else:
-                        reply = value
-                    line_bot_api.reply_message(
-                        event.reply_token, TextSendMessage(text=reply)
-                    )
-                    set_last_reply(source_id, item.get("key"))
-                    return
-        # 沒找到就不回覆
-        return
+        # 取得同一個群組內所有人的最後訊息
+        group_user_keys = [k for k in user_last if k.startswith(f"{source_id}:")]
+        same_text_users = [
+            k for k in group_user_keys if user_last[k] == text and k != current_key
+        ]
+
+        if same_text_users:
+            # 有其他人在同群組說了一樣的話
+            line_bot_api.reply_message(event.reply_token, TextSendMessage(text=text))
+            # 清空這個群組所有人的紀錄
+            for k in group_user_keys:
+                del user_last[k]
+            save_user_last_message(user_last)  # 假設你有這個儲存函式
+            return
+
+        # 正常記錄這個人的訊息
+        set_user_last_message(current_key, text)
 
 
 if __name__ == "__main__":
