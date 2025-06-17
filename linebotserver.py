@@ -1,16 +1,20 @@
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, TextMessage, TextSendMessage, JoinEvent
-from linebot.models import StickerMessage
 from linebot.models import (
+    MessageEvent,
+    TextMessage,
+    TextSendMessage,
+    JoinEvent,
+    StickerMessage,
     TemplateSendMessage,
     MessageAction,
+    QuickReply,
+    QuickReplyButton,
+    ButtonsTemplate,
+    ImageMessage,
+    FileMessage,
 )
-from linebot.models import VideoSendMessage
-from linebot.models import QuickReply, QuickReplyButton, MessageAction
-from linebot.models import TemplateSendMessage, ButtonsTemplate, MessageAction
-from linebot.models import ImageMessage, FileMessage
 import json
 import os
 import random
@@ -838,6 +842,7 @@ def handle_message(event):
             reply = "老師今天沒話說～"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
+
     # 跟風模式
     if not (text.startswith("學 ") or text in commands):
         user_last = get_user_last_message()
@@ -845,17 +850,24 @@ def handle_message(event):
 
         # 取得同一個群組內所有人的最後訊息
         group_user_keys = [k for k in user_last if k.startswith(f"{source_id}:")]
-        same_text_users = [
-            k for k in group_user_keys if user_last[k] == text and k != current_key
-        ]
 
-        if same_text_users:
-            # 有其他人在同群組說了一樣的話
+        # 找出這個群組的上一句話（不包含自己）
+        last_other_user_key = None
+        last_other_user_text = None
+        # 依照寫入順序找最後一個不是自己的 key
+        for k in reversed(list(user_last.keys())):
+            if k.startswith(f"{source_id}:") and k != current_key:
+                last_other_user_key = k
+                last_other_user_text = user_last[k]
+                break
+
+        # 如果上一句是不同人說的，且內容和自己這句一樣，才跟風
+        if last_other_user_text == text and last_other_user_key is not None:
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=text))
             # 清空這個群組所有人的紀錄
             for k in group_user_keys:
                 del user_last[k]
-            save_user_last_message(user_last)  # 假設你有這個儲存函式
+            save_user_last_message(user_last)
             return
 
         # 正常記錄這個人的訊息
