@@ -62,7 +62,7 @@
 
 ### 老師語錄
 
-- `@nonsense 黃心如怎麼說`：隨機回覆預設的老師語錄（需於 `teacher.json` 設定語錄內容）。
+- `@nonsense 黃心如怎麼說`：隨機回覆預設的老師語錄（需先在 Supabase 的 `teacher.json` 狀態資料中設定語錄內容）。
 
 ### 統計資料與排行
 
@@ -81,7 +81,7 @@
 
 ## 口頭禪排行功能實作說明
 
-- 當你在群組或聊天室發送訊息時，LineBot 會自動將你的訊息內容依年份記錄在 `user_messages.json` 檔案中。
+- 當你在群組或聊天室發送訊息時，LineBot 會自動將你的訊息內容依年份記錄在 Supabase（`user_messages.json` 狀態鍵）中。
 - 當你輸入「@nonsense 口頭禪」時，Bot 會以「數量 5、今年」查詢。
 - 當你輸入「@nonsense 口頭禪 10 2024」時，Bot 會查詢 2024 年並回傳前 10 名（數量最多 20）。
 - 這項功能僅會統計你在該群組或聊天室的訊息，不會跨群組合併。
@@ -101,27 +101,42 @@
 
 1. **安裝依賴：**
    ```bash
-   pip install flask line-bot-sdk jieba
+   pip install flask line-bot-sdk jieba supabase
    ```
-2. **設定 LINE Channel Access Token 與 Secret，並於程式碼中填寫。**
-3. **啟動伺服器：**
+2. **設定環境變數（建議放在 `.env`）：**
+   ```env
+   CHANNEL_ACCESS_TOKEN=你的 LINE Channel Access Token
+   CHANNEL_SECRET=你的 LINE Channel Secret
+   SUPABASE_URL=https://你的專案.supabase.co
+   SUPABASE_SERVICE_ROLE_KEY=你的 service role key
+   # 可選：自訂資料表名稱，預設為 linebot_state
+   # SUPABASE_TABLE=linebot_state
+   ```
+3. **在 Supabase 建立資料表（預設 `linebot_state`）：**
+   ```sql
+   create table if not exists public.linebot_state (
+     state_key text primary key,
+     state_value jsonb not null default '{}'::jsonb,
+     updated_at timestamptz not null default now()
+   );
+   ```
+4. **啟動伺服器：**
    ```bash
    python linebotserver.py
    ```
-4. **設定 Webhook 至 `/callback` 路徑。**
+5. **設定 Webhook 至 `/callback` 路徑。**
+
+> 若未設定 Supabase 環境變數，程式會退回使用本機 JSON 檔案。
 
 ---
 
 ## 檔案說明
 
-- `data.json`：儲存學習內容
-- `silent_mode.json`：儲存靜音狀態
-- `rage_mode.json`：儲存亂說話模式狀態
-- `user_last_message.json`：記錄用戶最後訊息
-- `last_reply.json`：記錄上次回覆內容
-- `teacher.json`：老師語錄資料（選用）
-- `user_message_stats.json`：用戶訊息/貼圖/圖片/文件/連結等統計
-- `user_messages.json`：用戶訊息內容（用於口頭禪排行）
+- `linebotserver.py`：主程式，資料儲存已改為 Supabase 狀態表
+- `requirements.txt`：Python 相依套件（含 Supabase SDK）
+- `data.json` / `silent_mode.json` / `rage_mode.json` / `user_last_message.json` / `last_reply.json` / `teacher.json` / `user_message_stats.json` / `user_messages.json`：
+  - 作為狀態鍵名稱（存於 Supabase `state_key`）
+  - 若未設定 Supabase，則作為本機 fallback 檔案
 
 ---
 

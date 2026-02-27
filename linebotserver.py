@@ -20,9 +20,10 @@ import os
 import random
 import re
 import datetime
-import shutil
 import warnings
+import copy
 from linebot.models import QuickReply, QuickReplyButton
+from supabase import create_client
 
 warnings.filterwarnings("ignore", category=SyntaxWarning, module=r"jieba(\..*)?$")
 warnings.filterwarnings(
@@ -179,47 +180,91 @@ def callback():
 
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-
-def get_storage_dir():
-    custom_dir = os.getenv("LINEBOT_STORAGE_DIR")
-    if custom_dir:
-        storage_dir = custom_dir
-    elif os.getenv("VERCEL"):
-        storage_dir = "/tmp/linebot_data"
-    else:
-        storage_dir = BASE_DIR
-    os.makedirs(storage_dir, exist_ok=True)
-    return storage_dir
-
-
-STORAGE_DIR = get_storage_dir()
-
-
-def get_storage_file(filename):
-    target = os.path.join(STORAGE_DIR, filename)
-    source = os.path.join(BASE_DIR, filename)
-
-    if target != source and not os.path.exists(target) and os.path.exists(source):
-        try:
-            shutil.copy2(source, target)
-        except OSError:
-            pass
-
-    return target
-
-
-DATA_FILE = get_storage_file("data.json")
-SILENT_FILE = get_storage_file("silent_mode.json")
-USER_FILE = get_storage_file("user_last_message.json")
-LAST_REPLY_FILE = get_storage_file("last_reply.json")
-RAGE_FILE = get_storage_file("rage_mode.json")
-TEACHER_FILE = get_storage_file("teacher.json")
-USER_STATS_FILE = get_storage_file("user_message_stats.json")
-USER_MESSAGES_FILE = get_storage_file("user_messages.json")
-JOKE_FILE = get_storage_file("joke.json")
+DATA_FILE = "data.json"
+SILENT_FILE = "silent_mode.json"
+USER_FILE = "user_last_message.json"
+LAST_REPLY_FILE = "last_reply.json"
+RAGE_FILE = "rage_mode.json"
+TEACHER_FILE = "teacher.json"
+USER_STATS_FILE = "user_message_stats.json"
+USER_MESSAGES_FILE = "user_messages.json"
+JOKE_FILE = "joke.json"
 COMMAND_PREFIX = "@nonsense"
-FOLLOW_STATE_FILE = get_storage_file("follow_state.json")
+FOLLOW_STATE_FILE = "follow_state.json"
+
+
+SUPABASE_URL = normalize_env_value(os.getenv("SUPABASE_URL"))
+SUPABASE_KEY = normalize_env_value(
+    os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_ANON_KEY")
+)
+SUPABASE_TABLE = normalize_env_value(os.getenv("SUPABASE_TABLE", "linebot_state"))
+supabase = (
+    create_client(SUPABASE_URL, SUPABASE_KEY) if SUPABASE_URL and SUPABASE_KEY else None
+)
+
+
+def _local_file_path(filename):
+    return os.path.join(BASE_DIR, filename)
+
+
+def _read_local_json(filename, default):
+    file_path = _local_file_path(filename)
+    if not os.path.exists(file_path):
+        return copy.deepcopy(default)
+    with open(file_path, "r", encoding="utf-8") as f:
+        try:
+            data = json.load(f)
+        except json.JSONDecodeError:
+            return copy.deepcopy(default)
+    return data
+
+
+def _write_local_json(filename, value):
+    file_path = _local_file_path(filename)
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(value, f, ensure_ascii=False, indent=2)
+
+
+def get_state(state_key, default):
+    if supabase:
+        try:
+            result = (
+                supabase.table(SUPABASE_TABLE)
+                .select("state_value")
+                .eq("state_key", state_key)
+                .limit(1)
+                .execute()
+            )
+            rows = result.data or []
+            if rows:
+                return rows[0].get("state_value", copy.deepcopy(default))
+
+            local_value = _read_local_json(state_key, default)
+            if local_value != default:
+                set_state(state_key, local_value)
+                return local_value
+            return copy.deepcopy(default)
+        except Exception:
+            return _read_local_json(state_key, default)
+    return _read_local_json(state_key, default)
+
+
+def set_state(state_key, value):
+    if supabase:
+        try:
+            (
+                supabase.table(SUPABASE_TABLE)
+                .upsert(
+                    {"state_key": state_key, "state_value": value},
+                    on_conflict="state_key",
+                )
+                .execute()
+            )
+            return
+        except Exception:
+            _write_local_json(state_key, value)
+            return
+    _write_local_json(state_key, value)
 
 
 def get_prefixed_command_text(message):
@@ -251,14 +296,7 @@ def save_user_message(group_id, user_id, message):
     if is_command_message(message):
         return
     year = str(datetime.datetime.now().year)
-    if os.path.exists(USER_MESSAGES_FILE):
-        with open(USER_MESSAGES_FILE, "r", encoding="utf-8") as f:
-            try:
-                data = json.load(f)
-            except json.JSONDecodeError:
-                data = {}
-    else:
-        data = {}
+    data = get_state(USER_MESSAGES_FILE, {})
     if group_id not in data:
         data[group_id] = {}
     if user_id not in data[group_id]:
@@ -268,15 +306,11 @@ def save_user_message(group_id, user_id, message):
     ):
         data[group_id][user_id][year] = []
     data[group_id][user_id][year].append(message)
-    with open(USER_MESSAGES_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    set_state(USER_MESSAGES_FILE, data)
 
 
 def get_user_top_words(group_id, user_id, year=None, topn=5):
-    if not os.path.exists(USER_MESSAGES_FILE):
-        return "沒有資料"
-    with open(USER_MESSAGES_FILE, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    data = get_state(USER_MESSAGES_FILE, {})
     user_data = data.get(group_id, {}).get(user_id, {})
     if not user_data:
         return "沒有資料"
@@ -372,14 +406,7 @@ def update_user_message_stats(group_id, user_id, message_type=None, is_link=Fals
     now = datetime.datetime.now()
     month_key = now.strftime("%Y-%m")
     hour_key = str(now.hour)
-    if os.path.exists(USER_STATS_FILE):
-        with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
-            try:
-                stats = json.load(f)
-            except json.JSONDecodeError:
-                stats = {}
-    else:
-        stats = {}
+    stats = get_state(USER_STATS_FILE, {})
     if group_id not in stats:
         stats[group_id] = {}
     if user_id not in stats[group_id]:
@@ -412,22 +439,14 @@ def update_user_message_stats(group_id, user_id, message_type=None, is_link=Fals
             stats[group_id][user_id].get("sticker_total", 0) + 1
         )
 
-    with open(USER_STATS_FILE, "w", encoding="utf-8") as f:
-        json.dump(stats, f, ensure_ascii=False, indent=2)
+    set_state(USER_STATS_FILE, stats)
 
 
 # 獲取使用者訊息統計（依群組和使用者）
 def get_user_message_stats(group_id, user_id):
     now = datetime.datetime.now()
     month_key = now.strftime("%Y-%m")
-    if os.path.exists(USER_STATS_FILE):
-        with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
-            try:
-                stats = json.load(f)
-            except json.JSONDecodeError:
-                stats = {}
-    else:
-        stats = {}
+    stats = get_state(USER_STATS_FILE, {})
     user_stats = stats.get(group_id, {}).get(user_id, {})
     total = user_stats.get("total", 0)
     month = user_stats.get(month_key, 0)
@@ -436,130 +455,72 @@ def get_user_message_stats(group_id, user_id):
 
 # 設定最後回覆的 key（依群組）
 def set_last_reply(source_id, key):
-    if os.path.exists(LAST_REPLY_FILE):
-        with open(LAST_REPLY_FILE, "r", encoding="utf-8") as f:
-            try:
-                data = json.load(f)
-            except json.JSONDecodeError:
-                data = {}
-    else:
-        data = {}
+    data = get_state(LAST_REPLY_FILE, {})
     data[source_id] = {"key": key}
-    with open(LAST_REPLY_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    set_state(LAST_REPLY_FILE, data)
 
 
 # 獲取最後回覆的 key（依群組）
 def get_last_reply(source_id):
-    if os.path.exists(LAST_REPLY_FILE):
-        with open(LAST_REPLY_FILE, "r", encoding="utf-8") as f:
-            try:
-                data = json.load(f)
-                group_data = data.get(source_id, {})
-                return group_data.get("key")
-            except json.JSONDecodeError:
-                return None
-    return None
+    data = get_state(LAST_REPLY_FILE, {})
+    group_data = data.get(source_id, {})
+    return group_data.get("key")
 
 
 # 獲取使用者最後的訊息
 def get_user_last_message():
-    if os.path.exists(USER_FILE):
-        with open(USER_FILE, "r", encoding="utf-8") as f:
-            try:
-                return json.load(f)
-            except json.JSONDecodeError:
-                return {}
-    return {}
+    return get_state(USER_FILE, {})
 
 
 # 設定使用者最後的訊息
 def set_user_last_message(user_id, message):
     data = get_user_last_message()
     data[user_id] = message
-    with open(USER_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    set_state(USER_FILE, data)
 
 
 # 新增：儲存所有使用者最後訊息（用於群組重複訊息清空）
 def save_user_last_message(data):
-    with open(USER_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    set_state(USER_FILE, data)
 
 
 def get_follow_state():
-    if os.path.exists(FOLLOW_STATE_FILE):
-        with open(FOLLOW_STATE_FILE, "r", encoding="utf-8") as f:
-            try:
-                return json.load(f)
-            except json.JSONDecodeError:
-                return {}
-    return {}
+    return get_state(FOLLOW_STATE_FILE, {})
 
 
 def save_follow_state(data):
-    with open(FOLLOW_STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    set_state(FOLLOW_STATE_FILE, data)
 
 
 # 檢查是否為靜音模式（依群組）
 def is_silent(source_id):
-    if os.path.exists(SILENT_FILE):
-        with open(SILENT_FILE, "r", encoding="utf-8") as f:
-            try:
-                data = json.load(f)
-                return data.get(source_id, False)
-            except json.JSONDecodeError:
-                return False
-    return False
+    data = get_state(SILENT_FILE, {})
+    return data.get(source_id, False)
 
 
 # 設定靜音模式（依群組）
 def set_silent(source_id, silent):
-    if os.path.exists(SILENT_FILE):
-        with open(SILENT_FILE, "r", encoding="utf-8") as f:
-            try:
-                data = json.load(f)
-            except json.JSONDecodeError:
-                data = {}
-    else:
-        data = {}
+    data = get_state(SILENT_FILE, {})
     data[source_id] = silent
-    with open(SILENT_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    set_state(SILENT_FILE, data)
 
 
 # 檢查是否為亂說話模式
 def is_rage_mode(source_id):
-    if os.path.exists(RAGE_FILE):
-        with open(RAGE_FILE, "r", encoding="utf-8") as f:
-            try:
-                data = json.load(f)
-                return data.get(source_id, False)
-            except json.JSONDecodeError:
-                return False
-    return False
+    data = get_state(RAGE_FILE, {})
+    return data.get(source_id, False)
 
 
 # 設定亂說話模式
 def set_rage_mode(source_id, mode):
-    if os.path.exists(RAGE_FILE):
-        with open(RAGE_FILE, "r", encoding="utf-8") as f:
-            try:
-                data = json.load(f)
-            except json.JSONDecodeError:
-                data = {}
-    else:
-        data = {}
+    data = get_state(RAGE_FILE, {})
     data[source_id] = mode
-    with open(RAGE_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
+    set_state(RAGE_FILE, data)
 
 
 # 獲取群組發言排行榜
 def get_group_message_rank_with_names(group_id):
-    with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
-        stats = json.load(f)
+    stats = get_state(USER_STATS_FILE, {})
 
     users = stats.get(group_id, {})
     if not users:
@@ -672,14 +633,7 @@ def handle_message(event):
     if is_silent(source_id):
         return
     # 查詢功能
-    if os.path.exists(filename):
-        with open(filename, "r", encoding="utf-8") as f:
-            try:
-                all_data = json.load(f)
-            except json.JSONDecodeError:
-                all_data = []
-    else:
-        all_data = []
+    all_data = get_state(filename, [])
 
     if is_rage_mode(source_id):
         # 狂暴模式：查所有聊天室，隨機選一個
@@ -718,15 +672,7 @@ def handle_message(event):
                 return
 
     if command_text == "說笑話":
-
-        if os.path.exists(JOKE_FILE):
-            with open(JOKE_FILE, "r", encoding="utf-8") as f:
-                try:
-                    jokes = json.load(f)
-                except json.JSONDecodeError:
-                    jokes = []
-        else:
-            jokes = []
+        jokes = get_state(JOKE_FILE, [])
         if jokes:
             joke = random.choice(jokes)
             reply = joke.get("joke", "今天沒有笑話喔！")
@@ -784,14 +730,7 @@ def handle_message(event):
         return
     if command_text == "統計資料" or command_text == "資料統計":
         # 讀取統計資料
-        if os.path.exists(USER_STATS_FILE):
-            with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
-                try:
-                    stats = json.load(f)
-                except json.JSONDecodeError:
-                    stats = {}
-        else:
-            stats = {}
+        stats = get_state(USER_STATS_FILE, {})
         user_stats = stats.get(source_id, {}).get(user_id, {})
         total = user_stats.get("total", 0)
         month = user_stats.get(datetime.datetime.now().strftime("%Y-%m"), 0)
@@ -853,14 +792,7 @@ def handle_message(event):
         )
         return
     if command_text == "訊息統計":
-        if os.path.exists(USER_STATS_FILE):
-            with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
-                try:
-                    stats = json.load(f)
-                except json.JSONDecodeError:
-                    stats = {}
-        else:
-            stats = {}
+        stats = get_state(USER_STATS_FILE, {})
         user_stats = stats.get(source_id, {}).get(user_id, {})
         total = user_stats.get("total", 0)
         month = user_stats.get(datetime.datetime.now().strftime("%Y-%m"), 0)
@@ -868,14 +800,7 @@ def handle_message(event):
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
     if command_text == "全部統計":
-        if os.path.exists(USER_STATS_FILE):
-            with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
-                try:
-                    stats = json.load(f)
-                except json.JSONDecodeError:
-                    stats = {}
-        else:
-            stats = {}
+        stats = get_state(USER_STATS_FILE, {})
         user_stats = stats.get(source_id, {}).get(user_id, {})
         total = user_stats.get("total", 0)
         month = user_stats.get(datetime.datetime.now().strftime("%Y-%m"), 0)
@@ -900,14 +825,7 @@ def handle_message(event):
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
     if command_text == "每小時統計":
-        if os.path.exists(USER_STATS_FILE):
-            with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
-                try:
-                    stats = json.load(f)
-                except json.JSONDecodeError:
-                    stats = {}
-        else:
-            stats = {}
+        stats = get_state(USER_STATS_FILE, {})
         user_stats = stats.get(source_id, {}).get(user_id, {})
         hour_count = user_stats.get("hour_count", {})
         if hour_count:
@@ -919,42 +837,21 @@ def handle_message(event):
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
     if command_text == "連結統計":
-        if os.path.exists(USER_STATS_FILE):
-            with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
-                try:
-                    stats = json.load(f)
-                except json.JSONDecodeError:
-                    stats = {}
-        else:
-            stats = {}
+        stats = get_state(USER_STATS_FILE, {})
         user_stats = stats.get(source_id, {}).get(user_id, {})
         link_total = user_stats.get("link_total", 0)
         reply = f"你在這個群組傳過 {link_total} 次連結"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
     if command_text == "圖片統計":
-        if os.path.exists(USER_STATS_FILE):
-            with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
-                try:
-                    stats = json.load(f)
-                except json.JSONDecodeError:
-                    stats = {}
-        else:
-            stats = {}
+        stats = get_state(USER_STATS_FILE, {})
         user_stats = stats.get(source_id, {}).get(user_id, {})
         image_total = user_stats.get("image_total", 0)
         reply = f"你在這個群組傳過 {image_total} 次圖片"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
     if command_text == "文件統計":
-        if os.path.exists(USER_STATS_FILE):
-            with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
-                try:
-                    stats = json.load(f)
-                except json.JSONDecodeError:
-                    stats = {}
-        else:
-            stats = {}
+        stats = get_state(USER_STATS_FILE, {})
         user_stats = stats.get(source_id, {}).get(user_id, {})
         file_total = user_stats.get("file_total", 0)
         reply = f"你在這個群組傳過 {file_total} 次文件"
@@ -962,14 +859,7 @@ def handle_message(event):
         return
     if command_text == "貼圖統計":
         # 讀取統計資料
-        if os.path.exists(USER_STATS_FILE):
-            with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
-                try:
-                    stats = json.load(f)
-                except json.JSONDecodeError:
-                    stats = {}
-        else:
-            stats = {}
+        stats = get_state(USER_STATS_FILE, {})
         user_stats = stats.get(source_id, {}).get(user_id, {})
         sticker_total = user_stats.get("sticker_total", 0)
         reply = f"你在這個群組傳過 {sticker_total} 次貼圖"
@@ -996,14 +886,7 @@ def handle_message(event):
                 return
             filename = DATA_FILE
             # 讀取現有資料
-            if os.path.exists(filename):
-                with open(filename, "r", encoding="utf-8") as f:
-                    try:
-                        all_data = json.load(f)
-                    except json.JSONDecodeError:
-                        all_data = []
-            else:
-                all_data = []
+            all_data = get_state(filename, [])
             # 移除已存在的相同 key 且同一個聊天室
             all_data = [
                 item
@@ -1012,9 +895,8 @@ def handle_message(event):
             ]
             # 加入新資料
             all_data.append({"key": key, "value": value, "source_id": source_id})
-            # 寫回 json
-            with open(filename, "w", encoding="utf-8") as f:
-                json.dump(all_data, f, ensure_ascii=False, indent=2)
+            # 寫回狀態
+            set_state(filename, all_data)
             print(f"已學會：{key} = {value} (來源: {source_id})")
             reply = f"好喔 好喔"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
@@ -1022,15 +904,7 @@ def handle_message(event):
             reply = "格式錯誤，請輸入：學 A B"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
     if command_text == "你會說什麼":
-
-        if os.path.exists(filename):
-            with open(filename, "r", encoding="utf-8") as f:
-                try:
-                    all_data = json.load(f)
-                except json.JSONDecodeError:
-                    all_data = []
-        else:
-            all_data = []
+        all_data = get_state(filename, [])
         lines = ["這裡教我說\n=============="]
         for item in all_data:
             if item.get("source_id") == source_id:
@@ -1041,14 +915,7 @@ def handle_message(event):
         last_key = get_last_reply(source_id)
         if last_key:
             # 讀取現有資料
-            if os.path.exists(filename):
-                with open(filename, "r", encoding="utf-8") as f:
-                    try:
-                        all_data = json.load(f)
-                    except json.JSONDecodeError:
-                        all_data = []
-            else:
-                all_data = []
+            all_data = get_state(filename, [])
             # 找到 last_key 並且 source_id 相同的 value
             last_val = None
             for item in all_data:
@@ -1065,19 +932,17 @@ def handle_message(event):
                     item.get("key") == last_key and item.get("source_id") == source_id
                 )
             ]
-            with open(filename, "w", encoding="utf-8") as f:
-                json.dump(all_data, f, ensure_ascii=False, indent=2)
+            set_state(filename, all_data)
             # 回覆 value
             reply = f"下次不說{last_val}了"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
     if command_text == "黃心如怎麼說":
         teacher_file = TEACHER_FILE
-        if os.path.exists(teacher_file):
-            with open(teacher_file, "r", encoding="utf-8") as f:
-                teacher_data = json.load(f)
-                phrases = teacher_data.get("phrases", [])
-                reply = random.choice(phrases)
+        teacher_data = get_state(teacher_file, {})
+        phrases = teacher_data.get("phrases", [])
+        if phrases:
+            reply = random.choice(phrases)
         else:
             reply = "老師今天沒話說～"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
