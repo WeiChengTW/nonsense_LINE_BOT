@@ -1,6 +1,6 @@
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
-from linebot.exceptions import InvalidSignatureError
+from linebot.exceptions import InvalidSignatureError, LineBotApiError
 from linebot.models import (
     MessageEvent,
     TextMessage,
@@ -28,6 +28,9 @@ warnings.filterwarnings("ignore", category=SyntaxWarning, module=r"jieba(\..*)?$
 warnings.filterwarnings(
     "ignore", category=SyntaxWarning, module=r"_vendor\.jieba(\..*)?$"
 )
+warnings.filterwarnings(
+    "ignore", category=SyntaxWarning, message=r"invalid escape sequence.*"
+)
 import jieba
 from collections import Counter
 
@@ -53,8 +56,8 @@ def load_env_file(env_path=".env"):
 
 load_env_file()
 
-channel_access_token = os.getenv("CHANNEL_ACCESS_TOKEN")
-channel_secret = os.getenv("CHANNEL_SECRET")
+channel_access_token = (os.getenv("CHANNEL_ACCESS_TOKEN") or "").strip()
+channel_secret = (os.getenv("CHANNEL_SECRET") or "").strip()
 
 if not channel_access_token or not channel_secret:
     missing = []
@@ -160,6 +163,10 @@ def callback():
         line_handler.handle(body, signature)
     except InvalidSignatureError:
         abort(400)
+    except LineBotApiError:
+        app.logger.exception("LINE API 呼叫失敗，請檢查 CHANNEL_ACCESS_TOKEN 是否正確")
+    except Exception:
+        app.logger.exception("處理 webhook 時發生未預期錯誤")
     return "OK"
 
 
