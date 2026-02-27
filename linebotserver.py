@@ -121,6 +121,9 @@ INSTRUCTION = (
     "-\n"
     "@nonsense 系統狀態\n"
     "查看目前資料庫與執行模式\n"
+    "-\n"
+    "@nonsense 清空資料\n"
+    "重製所有狀態資料\n"
 )
 # INSTRUCTION = (
 #     "【LineBot 使用說明】\n"
@@ -150,6 +153,7 @@ commands = [
     "你會說什麼",
     "壞壞",
     "系統狀態",
+    "清空資料",
     "黃心如怎麼說",
     "全部統計",
     "每小時統計",
@@ -333,6 +337,27 @@ def _write_local_json(filename, value):
             json.dump(value, f, ensure_ascii=False, indent=2)
     except OSError:
         app.logger.exception("本機狀態寫入失敗：%s", file_path)
+
+
+def reset_all_state_data():
+    default_state_map = {
+        DATA_FILE: [],
+        SILENT_FILE: {},
+        USER_FILE: {},
+        LAST_REPLY_FILE: {},
+        RAGE_FILE: {},
+        TEACHER_FILE: {},
+        USER_STATS_FILE: {},
+        USER_MESSAGES_FILE: {},
+        JOKE_FILE: [],
+        FOLLOW_STATE_FILE: {},
+    }
+
+    for state_key, default_value in default_state_map.items():
+        set_state(state_key, copy.deepcopy(default_value))
+        _write_local_json(state_key, copy.deepcopy(default_value))
+
+    return len(default_state_map)
 
 
 def get_state(state_key, default):
@@ -728,6 +753,12 @@ def handle_message(event):
     if command_text == "系統狀態":
         status_text = get_system_status_text()
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=status_text))
+        return
+
+    if command_text == "清空資料":
+        reset_count = reset_all_state_data()
+        reply = f"已重製完成，共清空 {reset_count} 個狀態項目。"
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
 
     # 處理閉嘴/聊天指令
