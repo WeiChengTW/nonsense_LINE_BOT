@@ -21,7 +21,13 @@ import random
 import re
 import datetime
 import shutil
+import warnings
 from linebot.models import QuickReply, QuickReplyButton
+
+warnings.filterwarnings("ignore", category=SyntaxWarning, module=r"jieba(\..*)?$")
+warnings.filterwarnings(
+    "ignore", category=SyntaxWarning, module=r"_vendor\.jieba(\..*)?$"
+)
 import jieba
 from collections import Counter
 
