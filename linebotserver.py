@@ -118,6 +118,9 @@ INSTRUCTION = (
     "-\n"
     "@nonsense 壞壞\n"
     "刪除 bot 上次回覆的內容\n"
+    "-\n"
+    "@nonsense 系統狀態\n"
+    "查詢目前資料庫/儲存狀態\n"
 )
 # INSTRUCTION = (
 #     "【LineBot 使用說明】\n"
@@ -161,6 +164,7 @@ commands = [
     "排行榜",
     "說笑話",
     "唱歌",
+    "系統狀態",
 ]
 BAN_WORDS = ["洪偉城", "洪偉成", "宏偉成"]
 
@@ -192,6 +196,7 @@ USER_MESSAGES_FILE = "user_messages.json"
 JOKE_FILE = "joke.json"
 COMMAND_PREFIX = "@nonsense"
 FOLLOW_STATE_FILE = "follow_state.json"
+TIMEZONE_TEXT = "Asia/Taipei (UTC+8)"
 
 
 SUPABASE_URL = normalize_env_value(os.getenv("SUPABASE_URL"))
@@ -214,6 +219,53 @@ def _local_file_path(filename):
         storage_dir = BASE_DIR
     os.makedirs(storage_dir, exist_ok=True)
     return os.path.join(storage_dir, filename)
+
+
+def _is_ephemeral_storage_mode():
+    return bool(os.getenv("VERCEL") or BASE_DIR.startswith("/var/task"))
+
+
+def get_system_status_text():
+    if supabase:
+        try:
+            (supabase.table(SUPABASE_TABLE).select("state_key").limit(1).execute())
+            lines = [
+                "資料庫：Supabase Postgres（已連線）",
+                f"資料檔：{SUPABASE_TABLE}（table）",
+                "模式：雲端持久化",
+                f"時區：{TIMEZONE_TEXT}",
+            ]
+            return "\n".join(lines)
+        except Exception:
+            fallback_file = _local_file_path(DATA_FILE)
+            lines = [
+                "資料庫：Supabase Postgres（連線失敗，已改用本機）",
+                f"資料檔：{fallback_file}",
+                "模式：本機檔案備援",
+                f"時區：{TIMEZONE_TEXT}",
+            ]
+            return "\n".join(lines)
+
+    local_file = _local_file_path(DATA_FILE)
+    if _is_ephemeral_storage_mode():
+        lines = [
+            "資料庫：本機 JSON（無外部資料庫）",
+            f"資料檔：{local_file}",
+            "模式：雲端臨時（可能重置）",
+            f"時區：{TIMEZONE_TEXT}",
+            "",
+            "⚠️目前為雲端臨時資料模式（本機 /tmp），可能在幾分鐘後清空。",
+            "請設定 SUPABASE_URL 與 SUPABASE_SERVICE_ROLE_KEY 以持久保存。",
+        ]
+        return "\n".join(lines)
+
+    lines = [
+        "資料庫：本機 JSON（無外部資料庫）",
+        f"資料檔：{local_file}",
+        "模式：本機持久化",
+        f"時區：{TIMEZONE_TEXT}",
+    ]
+    return "\n".join(lines)
 
 
 def _read_local_json(filename, default):
@@ -629,6 +681,11 @@ def handle_message(event):
             ),
         )
         line_bot_api.reply_message(event.reply_token, template_message)
+        return
+
+    if command_text == "系統狀態":
+        status_text = get_system_status_text()
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=status_text))
         return
 
     # 處理閉嘴/聊天指令
