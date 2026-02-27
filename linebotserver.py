@@ -28,10 +28,8 @@ from collections import Counter
 
 app = Flask(__name__)
 
-line_bot_api = LineBotApi(
-    "o/bUKxlPGA3FzqNC8oscvP2JTMfLijLyTSOyBlqOn+7O8qS7dYmLvylKsxvW122UMu7oI3FXvBeXG2gFisMYJ8H/Ryjy7mfc1MyXNK5SX9VQgAYazOYczx4XyiROCK8qb08flT4QmqM7+62G47+3sQdB04t89/1O/w1cDnyilFU="
-)
-handler = WebhookHandler("4bf0915e79f18c12d019119189398de9")
+line_bot_api = LineBotApi(os.getenv("CHANNEL_ACCESS_TOKEN"))
+line_handler = WebhookHandler(os.getenv("CHANNEL_SECRET"))
 
 INSTRUCTION = (
     "【LineBot 使用說明】\n"
@@ -93,7 +91,7 @@ def callback():
     signature = request.headers["X-Line-Signature"]
     body = request.get_data(as_text=True)
     try:
-        handler.handle(body, signature)
+        line_handler.handle(body, signature)
     except InvalidSignatureError:
         abort(400)
     return "OK"
@@ -376,12 +374,12 @@ def get_group_message_rank_with_names(group_id):
     return result
 
 
-@handler.add(JoinEvent)
+@line_handler.add(JoinEvent)
 def handle_join(event):
     line_bot_api.reply_message(event.reply_token, TextSendMessage(text=INSTRUCTION))
 
 
-@handler.add(MessageEvent, message=StickerMessage)
+@line_handler.add(MessageEvent, message=StickerMessage)
 def handle_sticker(event):
     user_id = event.source.user_id
     source_id = get_source_id(event)
@@ -390,7 +388,7 @@ def handle_sticker(event):
     # 不回覆
 
 
-@handler.add(MessageEvent, message=ImageMessage)
+@line_handler.add(MessageEvent, message=ImageMessage)
 def handle_image(event):
     user_id = event.source.user_id
     source_id = get_source_id(event)
@@ -398,7 +396,7 @@ def handle_image(event):
     # 不回覆
 
 
-@handler.add(MessageEvent, message=FileMessage)
+@line_handler.add(MessageEvent, message=FileMessage)
 def handle_file(event):
     user_id = event.source.user_id
     source_id = get_source_id(event)
@@ -406,7 +404,7 @@ def handle_file(event):
     # 不回覆
 
 
-@handler.add(MessageEvent, message=TextMessage)
+@line_handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     text = event.message.text
     user_id = event.source.user_id
