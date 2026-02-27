@@ -22,6 +22,7 @@ import re
 import datetime
 import warnings
 import copy
+import tempfile
 from linebot.models import QuickReply, QuickReplyButton
 from supabase import create_client
 
@@ -204,14 +205,26 @@ supabase = (
 
 
 def _local_file_path(filename):
-    return os.path.join(BASE_DIR, filename)
+    custom_dir = normalize_env_value(os.getenv("LINEBOT_STORAGE_DIR"))
+    if custom_dir:
+        storage_dir = custom_dir
+    elif os.getenv("VERCEL") or BASE_DIR.startswith("/var/task"):
+        storage_dir = os.path.join(tempfile.gettempdir(), "linebot_data")
+    else:
+        storage_dir = BASE_DIR
+    os.makedirs(storage_dir, exist_ok=True)
+    return os.path.join(storage_dir, filename)
 
 
 def _read_local_json(filename, default):
     file_path = _local_file_path(filename)
-    if not os.path.exists(file_path):
+    source_path = os.path.join(BASE_DIR, filename)
+
+    read_path = file_path if os.path.exists(file_path) else source_path
+    if not os.path.exists(read_path):
         return copy.deepcopy(default)
-    with open(file_path, "r", encoding="utf-8") as f:
+
+    with open(read_path, "r", encoding="utf-8") as f:
         try:
             data = json.load(f)
         except json.JSONDecodeError:
@@ -221,8 +234,11 @@ def _read_local_json(filename, default):
 
 def _write_local_json(filename, value):
     file_path = _local_file_path(filename)
-    with open(file_path, "w", encoding="utf-8") as f:
-        json.dump(value, f, ensure_ascii=False, indent=2)
+    try:
+        with open(file_path, "w", encoding="utf-8") as f:
+            json.dump(value, f, ensure_ascii=False, indent=2)
+    except OSError:
+        app.logger.exception("本機狀態寫入失敗：%s", file_path)
 
 
 def get_state(state_key, default):
