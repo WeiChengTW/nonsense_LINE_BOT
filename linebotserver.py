@@ -28,21 +28,76 @@ from collections import Counter
 
 app = Flask(__name__)
 
-line_bot_api = LineBotApi(os.getenv("CHANNEL_ACCESS_TOKEN"))
-line_handler = WebhookHandler(os.getenv("CHANNEL_SECRET"))
+
+def load_env_file(env_path=".env"):
+    if not os.path.exists(env_path):
+        return
+    with open(env_path, "r", encoding="utf-8") as f:
+        for raw_line in f:
+            line = raw_line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip().strip('"').strip("'")
+            if key and key not in os.environ:
+                os.environ[key] = value
+
+
+load_env_file()
+
+channel_access_token = os.getenv("CHANNEL_ACCESS_TOKEN")
+channel_secret = os.getenv("CHANNEL_SECRET")
+
+if not channel_access_token or not channel_secret:
+    missing = []
+    if not channel_access_token:
+        missing.append("CHANNEL_ACCESS_TOKEN")
+    if not channel_secret:
+        missing.append("CHANNEL_SECRET")
+    missing_text = ", ".join(missing)
+    raise SystemExit(
+        "缺少必要環境變數："
+        + missing_text
+        + "\n請先在 PowerShell 設定：\n"
+        + '$env:CHANNEL_ACCESS_TOKEN="你的token"\n'
+        + '$env:CHANNEL_SECRET="你的secret"'
+    )
+
+line_bot_api = LineBotApi(channel_access_token)
+line_handler = WebhookHandler(channel_secret)
 
 INSTRUCTION = (
     "【LineBot 使用說明】\n"
+    "所有指令都要加前綴：@nonsense\n"
     "指令\\功能說明\n"
     "----------------------\n"
-    "設定設定\\查詢/切換 bot 模式\n"
-    "閉嘴\\bot 進入靜音模式\n"
-    "聊天\\恢復回覆訊息\n"
-    "亂說話模式\\啟用跨聊天室回覆\n"
-    "乖寶寶模式\\只回本聊天室教的內容\n"
-    "學 A B\\教 bot 收到「A」回覆「B」\n"
-    "你會說什麼\\查本聊天室教的內容\n"
-    "壞壞\\刪除 bot 上次回覆的內容\n"
+    "@nonsense help\n"
+    "查看所有功能\n"
+    "-\n"
+    "@nonsense 設定設定\n"
+    "查詢/切換 bot 模式\n"
+    "-\n"
+    "@nonsense 閉嘴\n"
+    "bot 進入靜音模式\n"
+    "-\n"
+    "@nonsense 聊天\n"
+    "恢復回覆訊息\n"
+    "-\n"
+    "@nonsense 亂說話模式\n"
+    "啟用跨聊天室回覆\n"
+    "-\n"
+    "@nonsense 乖寶寶模式\n"
+    "只回本聊天室教的內容\n"
+    "-\n"
+    "@nonsense 學 A B\n"
+    "教 bot 收到「A」回覆「B」\n"
+    "-\n"
+    "@nonsense 你會說什麼\n"
+    "查本聊天室教的內容\n"
+    "-\n"
+    "@nonsense 壞壞\n"
+    "刪除 bot 上次回覆的內容\n"
 )
 # INSTRUCTION = (
 #     "【LineBot 使用說明】\n"
@@ -61,6 +116,9 @@ INSTRUCTION = (
 #     "排行榜\\查詢群組發言排行榜"
 # )
 commands = [
+    "help",
+    "功能",
+    "指令",
     "設定設定",
     "閉嘴",
     "聊天",
@@ -79,6 +137,7 @@ commands = [
     "圖片統計",
     "文件統計",
     "我的口頭禪",
+    "口頭禪",
     "排行榜",
     "說笑話",
     "唱歌",
@@ -105,12 +164,37 @@ TEACHER_FILE = "teacher.json"
 USER_STATS_FILE = "user_message_stats.json"
 USER_MESSAGES_FILE = "user_messages.json"
 JOKE_FILE = "joke.json"
+COMMAND_PREFIX = "@nonsense"
+FOLLOW_STATE_FILE = "follow_state.json"
+
+
+def get_prefixed_command_text(message):
+    text = (message or "").strip()
+    if text.startswith("/"):
+        text = text[1:].lstrip()
+    if not text.startswith(COMMAND_PREFIX):
+        return None
+    command_text = text[len(COMMAND_PREFIX) :].strip()
+    return command_text if command_text else None
+
+
+def is_command_message(message):
+    command_text = get_prefixed_command_text(message)
+    if not command_text:
+        return False
+    if command_text in commands:
+        return True
+    if command_text.startswith("學 "):
+        return True
+    if command_text.startswith("我的口頭禪") or command_text.startswith("口頭禪"):
+        return True
+    return False
 
 
 # 儲存使用者訊息（依群組和使用者）
 def save_user_message(group_id, user_id, message):
     # 不儲存指令
-    if message in commands:
+    if is_command_message(message):
         return
     year = str(datetime.datetime.now().year)
     if os.path.exists(USER_MESSAGES_FILE):
@@ -144,6 +228,9 @@ def get_user_top_words(group_id, user_id, year=None, topn=5):
         return "沒有資料"
     if year is None:
         year = str(datetime.datetime.now().year)
+    if topn is None:
+        topn = 5
+    topn = max(1, min(int(topn), 20))
     msgs = user_data.get(year, [])
     if not msgs:
         return "沒有資料"
@@ -156,12 +243,55 @@ def get_user_top_words(group_id, user_id, year=None, topn=5):
     if not most_common:
         return "沒有資料"
     result = f"{year}年你的口頭禪排行：\n"
-    # 只顯示前三名
-    for idx, (word, count) in enumerate(most_common):
-        if idx >= 3:
-            break
+    for word, count in most_common:
         result += f"{word}：{count} 次\n"
     return result
+
+
+def parse_top_words_command(command_text):
+    if not command_text:
+        return None
+    if command_text.startswith("我的口頭禪"):
+        normalized = command_text
+    elif command_text.startswith("口頭禪"):
+        normalized = command_text.replace("口頭禪", "我的口頭禪", 1)
+    else:
+        return None
+
+    parts = normalized.split()
+    current_year = datetime.datetime.now().year
+    topn = 5
+    year = current_year
+
+    if len(parts) == 1:
+        return {"topn": topn, "year": str(year), "error": None}
+
+    if len(parts) == 2:
+        if not parts[1].isdigit():
+            return {
+                "error": "格式錯誤，請輸入：@nonsense 口頭禪 [數量] [年份]",
+            }
+        value = int(parts[1])
+        if 1900 <= value <= 2100:
+            year = value
+        else:
+            topn = value
+        if topn < 1 or topn > 20:
+            return {"error": "數量需介於 1 到 20，預設為 5"}
+        return {"topn": topn, "year": str(year), "error": None}
+
+    if len(parts) == 3:
+        if not parts[1].isdigit() or not parts[2].isdigit():
+            return {
+                "error": "格式錯誤，請輸入：@nonsense 口頭禪 [數量] [年份]",
+            }
+        topn = int(parts[1])
+        year = int(parts[2])
+        if topn < 1 or topn > 20:
+            return {"error": "數量需介於 1 到 20，預設為 5"}
+        return {"topn": topn, "year": str(year), "error": None}
+
+    return {"error": "格式錯誤，請輸入：@nonsense 口頭禪 [數量] [年份]"}
 
 
 # 獲取事件來源的 ID
@@ -296,6 +426,21 @@ def save_user_last_message(data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
+def get_follow_state():
+    if os.path.exists(FOLLOW_STATE_FILE):
+        with open(FOLLOW_STATE_FILE, "r", encoding="utf-8") as f:
+            try:
+                return json.load(f)
+            except json.JSONDecodeError:
+                return {}
+    return {}
+
+
+def save_follow_state(data):
+    with open(FOLLOW_STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
 # 檢查是否為靜音模式（依群組）
 def is_silent(source_id):
     if os.path.exists(SILENT_FILE):
@@ -407,6 +552,7 @@ def handle_file(event):
 @line_handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
     text = event.message.text
+    command_text = get_prefixed_command_text(text)
     user_id = event.source.user_id
     source_id = get_source_id(event)
     # 判斷是否為連結
@@ -415,7 +561,11 @@ def handle_message(event):
     if event.source.type in ["group", "room"]:
         save_user_message(source_id, user_id, text)
     filename = "data.json"
-    if text == "設定設定":
+    if command_text in ["help", "功能", "指令"]:
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=INSTRUCTION))
+        return
+
+    if command_text == "設定設定":
         # 取得目前狀態
         rage = is_rage_mode(source_id)
         status = "亂說話模式" if rage else "乖寶寶模式"
@@ -429,8 +579,14 @@ def handle_message(event):
                 title="模式設定",
                 text=reply_text,
                 actions=[
-                    MessageAction(label="亂說話模式", text="亂說話模式"),
-                    MessageAction(label="乖寶寶模式", text="乖寶寶模式"),
+                    MessageAction(
+                        label="亂說話模式",
+                        text=f"{COMMAND_PREFIX} 亂說話模式",
+                    ),
+                    MessageAction(
+                        label="乖寶寶模式",
+                        text=f"{COMMAND_PREFIX} 乖寶寶模式",
+                    ),
                 ],
             ),
         )
@@ -438,13 +594,13 @@ def handle_message(event):
         return
 
     # 處理閉嘴/聊天指令
-    if text == "閉嘴":
+    if command_text == "閉嘴":
         if not is_silent(source_id):
             set_silent(source_id, True)
             reply = "好啦 我閉嘴"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
             return
-    if text == "聊天":
+    if command_text == "聊天":
         if is_silent(source_id):
             reply = "嗚呼 強勢回歸！"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
@@ -500,7 +656,7 @@ def handle_message(event):
                 set_last_reply(source_id, item.get("key"))
                 return
 
-    if text == "說笑話":
+    if command_text == "說笑話":
 
         if os.path.exists(JOKE_FILE):
             with open(JOKE_FILE, "r", encoding="utf-8") as f:
@@ -518,17 +674,25 @@ def handle_message(event):
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
 
-    match = re.match(r"^我的口頭禪(?:\s*(\d{4}))?$", text)
     if event.source.type in ["group", "room"]:
-        if match:
-            year = match.group(1)
-            if not year:
-                year = str(datetime.datetime.now().year)
-            reply = get_user_top_words(source_id, user_id, year=year)
+        top_words_config = parse_top_words_command(command_text)
+        if top_words_config:
+            if top_words_config.get("error"):
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text=top_words_config["error"]),
+                )
+                return
+            reply = get_user_top_words(
+                source_id,
+                user_id,
+                year=top_words_config["year"],
+                topn=top_words_config["topn"],
+            )
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
             return
     # 處理亂說話模式
-    if text == "亂說話模式":
+    if command_text == "亂說話模式":
         if is_rage_mode(source_id):
             return  # 已經是亂說話模式就不回話
         set_rage_mode(source_id, True)
@@ -537,7 +701,7 @@ def handle_message(event):
         return
 
     # 處理乖寶寶模式（關閉亂說話模式）
-    if text == "乖寶寶模式":
+    if command_text == "乖寶寶模式":
         if not is_rage_mode(source_id):
             return  # 已經不是亂說話模式就不回話
         set_rage_mode(source_id, False)
@@ -545,7 +709,7 @@ def handle_message(event):
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
 
-    if text == "排行榜":
+    if command_text == "排行榜":
         if event.source.type == "group":
             group_id = source_id
             rank_text = get_group_message_rank_with_names(group_id)
@@ -557,7 +721,7 @@ def handle_message(event):
                 event.reply_token, TextSendMessage(text="請在群組中使用本指令")
             )
         return
-    if text == "統計資料" or text == "資料統計":
+    if command_text == "統計資料" or command_text == "資料統計":
         # 讀取統計資料
         if os.path.exists(USER_STATS_FILE):
             with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
@@ -580,28 +744,45 @@ def handle_message(event):
         quick_reply = QuickReply(
             items=[
                 QuickReplyButton(
-                    action=MessageAction(label="全部統計", text="全部統計")
+                    action=MessageAction(
+                        label="全部統計", text=f"{COMMAND_PREFIX} 全部統計"
+                    )
                 ),
                 QuickReplyButton(
-                    action=MessageAction(label="訊息統計", text="訊息統計")
+                    action=MessageAction(
+                        label="訊息統計", text=f"{COMMAND_PREFIX} 訊息統計"
+                    )
                 ),
                 QuickReplyButton(
-                    action=MessageAction(label="貼圖統計", text="貼圖統計")
+                    action=MessageAction(
+                        label="貼圖統計", text=f"{COMMAND_PREFIX} 貼圖統計"
+                    )
                 ),
                 QuickReplyButton(
-                    action=MessageAction(label="每小時統計", text="每小時統計")
+                    action=MessageAction(
+                        label="每小時統計", text=f"{COMMAND_PREFIX} 每小時統計"
+                    )
                 ),
                 QuickReplyButton(
-                    action=MessageAction(label="連結統計", text="連結統計")
+                    action=MessageAction(
+                        label="連結統計", text=f"{COMMAND_PREFIX} 連結統計"
+                    )
                 ),
                 QuickReplyButton(
-                    action=MessageAction(label="圖片統計", text="圖片統計")
+                    action=MessageAction(
+                        label="圖片統計", text=f"{COMMAND_PREFIX} 圖片統計"
+                    )
                 ),
                 QuickReplyButton(
-                    action=MessageAction(label="文件統計", text="文件統計")
+                    action=MessageAction(
+                        label="文件統計", text=f"{COMMAND_PREFIX} 文件統計"
+                    )
                 ),
                 QuickReplyButton(
-                    action=MessageAction(label="我今年的口頭禪", text="我的口頭禪")
+                    action=MessageAction(
+                        label="我今年的口頭禪",
+                        text=f"{COMMAND_PREFIX} 口頭禪",
+                    )
                 ),
             ]
         )
@@ -610,7 +791,7 @@ def handle_message(event):
             event.reply_token, TextSendMessage(text=reply_text, quick_reply=quick_reply)
         )
         return
-    if text == "訊息統計":
+    if command_text == "訊息統計":
         if os.path.exists(USER_STATS_FILE):
             with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
                 try:
@@ -625,7 +806,7 @@ def handle_message(event):
         reply = f"你在這個群組總共說了 {total} 句話\n本月說了 {month} 句話"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
-    if text == "全部統計":
+    if command_text == "全部統計":
         if os.path.exists(USER_STATS_FILE):
             with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
                 try:
@@ -657,7 +838,7 @@ def handle_message(event):
             reply += f"你最常在 {max_hour}:00 ~ {int(max_hour)+1}:00 說話（共 {max_count} 句）"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
-    if text == "每小時統計":
+    if command_text == "每小時統計":
         if os.path.exists(USER_STATS_FILE):
             with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
                 try:
@@ -676,7 +857,7 @@ def handle_message(event):
             reply = "你還沒有說過話喔！"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
-    if text == "連結統計":
+    if command_text == "連結統計":
         if os.path.exists(USER_STATS_FILE):
             with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
                 try:
@@ -690,7 +871,7 @@ def handle_message(event):
         reply = f"你在這個群組傳過 {link_total} 次連結"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
-    if text == "圖片統計":
+    if command_text == "圖片統計":
         if os.path.exists(USER_STATS_FILE):
             with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
                 try:
@@ -704,7 +885,7 @@ def handle_message(event):
         reply = f"你在這個群組傳過 {image_total} 次圖片"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
-    if text == "文件統計":
+    if command_text == "文件統計":
         if os.path.exists(USER_STATS_FILE):
             with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
                 try:
@@ -718,7 +899,7 @@ def handle_message(event):
         reply = f"你在這個群組傳過 {file_total} 次文件"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
-    if text == "貼圖統計":
+    if command_text == "貼圖統計":
         # 讀取統計資料
         if os.path.exists(USER_STATS_FILE):
             with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
@@ -734,8 +915,8 @@ def handle_message(event):
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
 
-    if text.startswith("學 "):
-        parts = text.strip().split(maxsplit=2)
+    if command_text and command_text.startswith("學 "):
+        parts = command_text.strip().split(maxsplit=2)
         if len(parts) == 3:
             key = parts[1]
             value = parts[2]
@@ -779,7 +960,7 @@ def handle_message(event):
         else:
             reply = "格式錯誤，請輸入：學 A B"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
-    if text == "你會說什麼":
+    if command_text == "你會說什麼":
 
         if os.path.exists(filename):
             with open(filename, "r", encoding="utf-8") as f:
@@ -795,7 +976,7 @@ def handle_message(event):
                 lines.append(f"{item.get('key')} ; {item.get('value')}")
         reply = "\n".join(lines)
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
-    if text == "壞壞":
+    if command_text == "壞壞":
         last_key = get_last_reply(source_id)
         if last_key:
             # 讀取現有資料
@@ -829,7 +1010,7 @@ def handle_message(event):
             reply = f"下次不說{last_val}了"
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
-    if text == "黃心如怎麼說":
+    if command_text == "黃心如怎麼說":
         teacher_file = TEACHER_FILE
         if os.path.exists(teacher_file):
             with open(teacher_file, "r", encoding="utf-8") as f:
@@ -841,35 +1022,28 @@ def handle_message(event):
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
 
-    # 跟風模式
-    if not (text.startswith("學 ") or text in commands):
-        user_last = get_user_last_message()
-        current_key = f"{source_id}:{user_id}"
+    # 跟風模式：需連續 3 個不同使用者說同一句才回覆
+    if not is_command_message(text):
+        follow_state = get_follow_state()
+        group_state = follow_state.get(source_id, {})
+        users = group_state.get("users", [])
+        last_text = group_state.get("text")
 
-        # 取得同一個群組內所有人的最後訊息
-        group_user_keys = [k for k in user_last if k.startswith(f"{source_id}:")]
+        if text == last_text:
+            if not users or users[-1] != user_id:
+                users.append(user_id)
+        else:
+            users = [user_id]
 
-        # 找出這個群組的上一句話（不包含自己）
-        last_other_user_key = None
-        last_other_user_text = None
-        # 依照寫入順序找最後一個不是自己的 key
-        for k in reversed(list(user_last.keys())):
-            if k.startswith(f"{source_id}:") and k != current_key:
-                last_other_user_key = k
-                last_other_user_text = user_last[k]
-                break
-
-        # 如果上一句是不同人說的，且內容和自己這句一樣，才跟風
-        if last_other_user_text == text and last_other_user_key is not None:
+        if len(users) >= 3:
             line_bot_api.reply_message(event.reply_token, TextSendMessage(text=text))
-            # 清空這個群組所有人的紀錄
-            for k in group_user_keys:
-                del user_last[k]
-            save_user_last_message(user_last)
+            if source_id in follow_state:
+                del follow_state[source_id]
+            save_follow_state(follow_state)
             return
 
-        # 正常記錄這個人的訊息
-        set_user_last_message(current_key, text)
+        follow_state[source_id] = {"text": text, "users": users[-3:]}
+        save_follow_state(follow_state)
 
 
 if __name__ == "__main__":
