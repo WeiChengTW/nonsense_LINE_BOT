@@ -56,8 +56,16 @@ def load_env_file(env_path=".env"):
 
 load_env_file()
 
-channel_access_token = (os.getenv("CHANNEL_ACCESS_TOKEN") or "").strip()
-channel_secret = (os.getenv("CHANNEL_SECRET") or "").strip()
+
+def normalize_env_value(value):
+    cleaned = (value or "").strip()
+    if len(cleaned) >= 2 and cleaned[0] == cleaned[-1] and cleaned[0] in ('"', "'"):
+        cleaned = cleaned[1:-1].strip()
+    return cleaned
+
+
+channel_access_token = normalize_env_value(os.getenv("CHANNEL_ACCESS_TOKEN"))
+channel_secret = normalize_env_value(os.getenv("CHANNEL_SECRET"))
 
 if not channel_access_token or not channel_secret:
     missing = []
