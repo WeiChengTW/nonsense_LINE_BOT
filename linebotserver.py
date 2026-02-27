@@ -123,7 +123,7 @@ INSTRUCTION = (
     "查看目前資料庫與執行模式\n"
     "-\n"
     "@nonsense 清空資料\n"
-    "重製所有狀態資料\n"
+    "重製本聊天室狀態資料\n"
 )
 # INSTRUCTION = (
 #     "【LineBot 使用說明】\n"
@@ -339,25 +339,39 @@ def _write_local_json(filename, value):
         app.logger.exception("本機狀態寫入失敗：%s", file_path)
 
 
-def reset_all_state_data():
-    default_state_map = {
-        DATA_FILE: [],
-        SILENT_FILE: {},
-        USER_FILE: {},
-        LAST_REPLY_FILE: {},
-        RAGE_FILE: {},
-        TEACHER_FILE: {},
-        USER_STATS_FILE: {},
-        USER_MESSAGES_FILE: {},
-        JOKE_FILE: [],
-        FOLLOW_STATE_FILE: {},
-    }
+def reset_source_state_data(source_id):
+    cleared_items = 0
 
-    for state_key, default_value in default_state_map.items():
-        set_state(state_key, copy.deepcopy(default_value))
-        _write_local_json(state_key, copy.deepcopy(default_value))
+    # 學習資料：只刪除本聊天室 source_id
+    all_data = get_state(DATA_FILE, [])
+    original_count = len(all_data)
+    filtered_data = [item for item in all_data if item.get("source_id") != source_id]
+    if len(filtered_data) != original_count:
+        cleared_items += original_count - len(filtered_data)
+    set_state(DATA_FILE, filtered_data)
+    _write_local_json(DATA_FILE, filtered_data)
 
-    return len(default_state_map)
+    # 這些狀態皆以 source_id 為 key
+    per_source_files = [SILENT_FILE, LAST_REPLY_FILE, RAGE_FILE, FOLLOW_STATE_FILE]
+    for state_file in per_source_files:
+        data = get_state(state_file, {})
+        if source_id in data:
+            del data[source_id]
+            cleared_items += 1
+        set_state(state_file, data)
+        _write_local_json(state_file, data)
+
+    # 這兩份統計以 source_id 為第一層 key
+    stats_files = [USER_STATS_FILE, USER_MESSAGES_FILE]
+    for state_file in stats_files:
+        data = get_state(state_file, {})
+        if source_id in data:
+            del data[source_id]
+            cleared_items += 1
+        set_state(state_file, data)
+        _write_local_json(state_file, data)
+
+    return cleared_items
 
 
 def get_state(state_key, default):
@@ -756,8 +770,8 @@ def handle_message(event):
         return
 
     if command_text == "清空資料":
-        reset_count = reset_all_state_data()
-        reply = f"已重製完成，共清空 {reset_count} 個狀態項目。"
+        reset_count = reset_source_state_data(source_id)
+        reply = f"已重製本聊天室資料，處理 {reset_count} 個項目。"
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
 

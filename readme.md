@@ -31,7 +31,7 @@
 | @nonsense 口頭禪 [數量] [年份]（或 我的口頭禪） | 查詢自己常用詞排行（數量預設 5、最多 20；年份預設當年） |
 | @nonsense 排行榜                                | 查詢群組發言排行榜（僅限群組）                          |
 | @nonsense 系統狀態                              | 查詢目前資料庫連線與執行模式                            |
-| @nonsense 清空資料                              | 重製所有狀態資料（含本機 fallback）                     |
+| @nonsense 清空資料                              | 僅重製本聊天室狀態資料（不影響其他群組）                |
 
 ---
 
@@ -82,7 +82,7 @@
 ### 系統與維護
 
 - `@nonsense 系統狀態`：查詢目前資料庫、連線來源與時區等執行資訊。
-- `@nonsense 清空資料`：重製所有狀態資料（如 `data.json`、`silent_mode.json`、`user_messages.json` 等狀態鍵），會同步更新 Supabase 與本機 fallback。
+- `@nonsense 清空資料`：僅重製本聊天室狀態資料（如 `data.json`、`silent_mode.json`、`user_messages.json` 在本聊天室對應的資料），不影響其他群組，並同步更新 Supabase 與本機 fallback。
 
 ---
 
