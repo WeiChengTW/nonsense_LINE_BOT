@@ -289,9 +289,16 @@ def get_user_top_words(group_id, user_id, year=None, topn=5):
     if not msgs:
         return "沒有資料"
     # jieba 斷詞
+    bot_prefix_pattern = re.compile(r"/?@nonsense", re.IGNORECASE)
     words = []
     for msg in msgs:
-        words += [w for w in jieba.cut(msg) if len(w.strip()) > 1]
+        cleaned_msg = bot_prefix_pattern.sub(" ", msg)
+        words += [
+            w
+            for w in jieba.cut(cleaned_msg)
+            if len(w.strip()) > 1
+            and not re.fullmatch(r"@?nonsense", w.strip(), re.IGNORECASE)
+        ]
     counter = Counter(words)
     most_common = counter.most_common(topn)
     if not most_common:
