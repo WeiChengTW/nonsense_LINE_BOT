@@ -165,7 +165,6 @@ commands = [
     "排行榜",
     "說笑話",
     "唱歌",
-    "系統狀態",
 ]
 BAN_WORDS = ["洪偉城", "洪偉成", "宏偉成"]
 
@@ -226,31 +225,54 @@ def _is_ephemeral_storage_mode():
     return bool(os.getenv("VERCEL") or BASE_DIR.startswith("/var/task"))
 
 
+def _get_database_source_name():
+    source_candidates = [
+        "SUPABASE_URL",
+        "SUPABASE_POSTGRES_URL_NON_POOLING",
+        "SUPABASE_POSTGRES_URL",
+        "SUPABASE_DB_URL",
+    ]
+    for key in source_candidates:
+        if normalize_env_value(os.getenv(key)):
+            return key
+    return None
+
+
 def get_system_status_text():
+    source_name = _get_database_source_name()
+
     if supabase:
         try:
             (supabase.table(SUPABASE_TABLE).select("state_key").limit(1).execute())
             lines = [
-                "資料庫：Supabase Postgres（已連線）",
-                f"資料檔：{SUPABASE_TABLE}（table）",
-                "模式：雲端持久化",
+                "系統狀態",
+                "資料庫：Postgres（持久化）",
+                f"連線來源：{source_name or 'SUPABASE_URL'}",
                 f"時區：{TIMEZONE_TEXT}",
             ]
             return "\n".join(lines)
-        except Exception:
+        except Exception as exc:
             fallback_file = _local_file_path(DATA_FILE)
+            err_text = str(exc).strip().replace("\n", " ")
+            if len(err_text) > 120:
+                err_text = err_text[:120] + "..."
             lines = [
+                "系統狀態",
                 "資料庫：Supabase Postgres（連線失敗，已改用本機）",
+                "連線狀態：異常",
                 f"資料檔：{fallback_file}",
                 "模式：本機檔案備援",
                 f"時區：{TIMEZONE_TEXT}",
+                f"錯誤：{err_text or 'unknown'}",
             ]
             return "\n".join(lines)
 
     local_file = _local_file_path(DATA_FILE)
     if _is_ephemeral_storage_mode():
         lines = [
+            "系統狀態",
             "資料庫：本機 JSON（無外部資料庫）",
+            "連線狀態：未設定 Supabase",
             f"資料檔：{local_file}",
             "模式：雲端臨時（可能重置）",
             f"時區：{TIMEZONE_TEXT}",
@@ -261,7 +283,9 @@ def get_system_status_text():
         return "\n".join(lines)
 
     lines = [
+        "系統狀態",
         "資料庫：本機 JSON（無外部資料庫）",
+        "連線狀態：未設定 Supabase",
         f"資料檔：{local_file}",
         "模式：本機持久化",
         f"時區：{TIMEZONE_TEXT}",
@@ -654,19 +678,6 @@ def handle_message(event):
     filename = DATA_FILE
     if command_text in ["help", "功能", "指令"]:
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=INSTRUCTION))
-        return
-
-    if command_text == "系統狀態":
-        reply = (
-            "系統狀態\n"
-            "資料庫：SQLite\n"
-            "資料檔：/tmp/bookkeeping.db\n"
-            "模式：雲端臨時（可能重置）\n"
-            "時區：Asia/Taipei (UTC+8)\n\n"
-            "⚠️目前為雲端臨時資料庫模式（SQLite /tmp），可能在幾分鐘後清空。"
-            "請設定 DATABASE_URL（Supabase Postgres）以持久保存"
-        )
-        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
 
     if command_text == "設定設定":
