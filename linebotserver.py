@@ -120,7 +120,7 @@ INSTRUCTION = (
     "刪除 bot 上次回覆的內容\n"
     "-\n"
     "@nonsense 系統狀態\n"
-    "查詢目前資料庫/儲存狀態\n"
+    "查看目前資料庫與執行模式\n"
 )
 # INSTRUCTION = (
 #     "【LineBot 使用說明】\n"
@@ -149,6 +149,7 @@ commands = [
     "乖寶寶模式",
     "你會說什麼",
     "壞壞",
+    "系統狀態",
     "黃心如怎麼說",
     "全部統計",
     "每小時統計",
@@ -653,6 +654,19 @@ def handle_message(event):
     filename = DATA_FILE
     if command_text in ["help", "功能", "指令"]:
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=INSTRUCTION))
+        return
+
+    if command_text == "系統狀態":
+        reply = (
+            "系統狀態\n"
+            "資料庫：SQLite\n"
+            "資料檔：/tmp/bookkeeping.db\n"
+            "模式：雲端臨時（可能重置）\n"
+            "時區：Asia/Taipei (UTC+8)\n\n"
+            "⚠️目前為雲端臨時資料庫模式（SQLite /tmp），可能在幾分鐘後清空。"
+            "請設定 DATABASE_URL（Supabase Postgres）以持久保存"
+        )
+        line_bot_api.reply_message(event.reply_token, TextSendMessage(text=reply))
         return
 
     if command_text == "設定設定":
