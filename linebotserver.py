@@ -20,6 +20,7 @@ import os
 import random
 import re
 import datetime
+import shutil
 from linebot.models import QuickReply, QuickReplyButton
 import jieba
 from collections import Counter
@@ -156,16 +157,48 @@ def callback():
     return "OK"
 
 
-SILENT_FILE = "silent_mode.json"
-USER_FILE = "user_last_message.json"
-LAST_REPLY_FILE = "last_reply.json"
-RAGE_FILE = "rage_mode.json"
-TEACHER_FILE = "teacher.json"
-USER_STATS_FILE = "user_message_stats.json"
-USER_MESSAGES_FILE = "user_messages.json"
-JOKE_FILE = "joke.json"
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def get_storage_dir():
+    custom_dir = os.getenv("LINEBOT_STORAGE_DIR")
+    if custom_dir:
+        storage_dir = custom_dir
+    elif os.getenv("VERCEL"):
+        storage_dir = "/tmp/linebot_data"
+    else:
+        storage_dir = BASE_DIR
+    os.makedirs(storage_dir, exist_ok=True)
+    return storage_dir
+
+
+STORAGE_DIR = get_storage_dir()
+
+
+def get_storage_file(filename):
+    target = os.path.join(STORAGE_DIR, filename)
+    source = os.path.join(BASE_DIR, filename)
+
+    if target != source and not os.path.exists(target) and os.path.exists(source):
+        try:
+            shutil.copy2(source, target)
+        except OSError:
+            pass
+
+    return target
+
+
+DATA_FILE = get_storage_file("data.json")
+SILENT_FILE = get_storage_file("silent_mode.json")
+USER_FILE = get_storage_file("user_last_message.json")
+LAST_REPLY_FILE = get_storage_file("last_reply.json")
+RAGE_FILE = get_storage_file("rage_mode.json")
+TEACHER_FILE = get_storage_file("teacher.json")
+USER_STATS_FILE = get_storage_file("user_message_stats.json")
+USER_MESSAGES_FILE = get_storage_file("user_messages.json")
+JOKE_FILE = get_storage_file("joke.json")
 COMMAND_PREFIX = "@nonsense"
-FOLLOW_STATE_FILE = "follow_state.json"
+FOLLOW_STATE_FILE = get_storage_file("follow_state.json")
 
 
 def get_prefixed_command_text(message):
@@ -497,7 +530,7 @@ def set_rage_mode(source_id, mode):
 
 # 獲取群組發言排行榜
 def get_group_message_rank_with_names(group_id):
-    with open("user_message_stats.json", "r", encoding="utf-8") as f:
+    with open(USER_STATS_FILE, "r", encoding="utf-8") as f:
         stats = json.load(f)
 
     users = stats.get(group_id, {})
@@ -560,7 +593,7 @@ def handle_message(event):
     update_user_message_stats(source_id, user_id, is_link=is_link)
     if event.source.type in ["group", "room"]:
         save_user_message(source_id, user_id, text)
-    filename = "data.json"
+    filename = DATA_FILE
     if command_text in ["help", "功能", "指令"]:
         line_bot_api.reply_message(event.reply_token, TextSendMessage(text=INSTRUCTION))
         return
@@ -933,7 +966,7 @@ def handle_message(event):
                     event.reply_token, TextSendMessage(text=reply)
                 )
                 return
-            filename = "data.json"
+            filename = DATA_FILE
             # 讀取現有資料
             if os.path.exists(filename):
                 with open(filename, "r", encoding="utf-8") as f:
