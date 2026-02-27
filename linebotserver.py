@@ -238,6 +238,11 @@ def _get_database_source_name():
     return None
 
 
+def _is_missing_supabase_table_error(exc):
+    text = str(exc)
+    return "PGRST205" in text or "Could not find the table" in text
+
+
 def get_system_status_text():
     source_name = _get_database_source_name()
 
@@ -252,6 +257,18 @@ def get_system_status_text():
             ]
             return "\n".join(lines)
         except Exception as exc:
+            if _is_missing_supabase_table_error(exc):
+                lines = [
+                    "系統狀態",
+                    "資料庫：Postgres（已連線，尚未初始化）",
+                    f"連線來源：{source_name or 'SUPABASE_URL'}",
+                    f"資料表：{SUPABASE_TABLE}（不存在）",
+                    "模式：本機檔案備援",
+                    f"時區：{TIMEZONE_TEXT}",
+                    "請先在 Supabase 建立資料表，建立後將自動切回持久化。",
+                ]
+                return "\n".join(lines)
+
             fallback_file = _local_file_path(DATA_FILE)
             err_text = str(exc).strip().replace("\n", " ")
             if len(err_text) > 120:
