@@ -120,13 +120,19 @@
    # SUPABASE_TABLE=linebot_state
    ```
 3. **在 Supabase 建立資料表（預設 `linebot_state`）：**
+
    ```sql
    create table if not exists public.linebot_state (
      state_key text primary key,
      state_value jsonb not null default '{}'::jsonb,
      updated_at timestamptz not null default now()
    );
+
+   -- 授予 service_role 操作權限（Supabase 安全性政策要求）
+   grant select, insert, update on public.linebot_state to service_role;
+   grant usage on schema public to service_role;
    ```
+
 4. **啟動伺服器：**
    ```bash
    python linebotserver.py
